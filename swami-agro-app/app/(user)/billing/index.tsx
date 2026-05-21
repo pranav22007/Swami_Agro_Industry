@@ -377,7 +377,7 @@ export default function NewBillingScreen() {
     }
   };
 
-  const { subtotal, totalGST, total } = calculateTotals();
+  const { subtotal, totalGST, cdPercentage, cdAmount, total } = calculateTotals();
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
