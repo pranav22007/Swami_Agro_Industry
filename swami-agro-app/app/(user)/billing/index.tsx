@@ -29,6 +29,7 @@ export default function NewBillingScreen() {
   const [recentCustomers, setRecentCustomers] = useState<any[]>([]);
   const [showCustList, setShowCustList] = useState(false);
   const [bankModalVisible, setBankModalVisible] = useState(false);
+  const [itemSearchQuery, setItemSearchQuery] = useState('');
 
   const router = useRouter();
 
@@ -54,6 +55,10 @@ export default function NewBillingScreen() {
       unsubscribeCust();
     };
   }, [activeBusiness]);
+
+  const filteredItems = items.filter(i => 
+    i.name?.toLowerCase().includes(itemSearchQuery.toLowerCase())
+  );
 
   const addItemToBill = (item: any) => {
     const existing = selectedItems.find(i => i.id === item.id);
@@ -286,6 +291,9 @@ export default function NewBillingScreen() {
     }
 
     setLoading(true);
+    let finalInvoiceNumber = '';
+    let billData: any = null;
+
     try {
       const user = auth.currentUser;
       if (!user || !activeBusiness) return;
@@ -293,13 +301,30 @@ export default function NewBillingScreen() {
       const { subtotal, totalGST, cdPercentage, cdAmount, total } = calculateTotals();
       const businessRef = doc(db, 'businesses', activeBusiness.id);
       
-      let finalInvoiceNumber = '';
-
-      // Use a transaction to safely increment the invoice number
+      // Use a transaction to safely increment the invoice number and deduct stock
       await runTransaction(db, async (transaction) => {
         const businessDoc = await transaction.get(businessRef);
         if (!businessDoc.exists()) {
           throw "Business document does not exist!";
+        }
+
+        // Deduct stock for each item
+        for (const item of selectedItems) {
+          const itemRef = doc(db, `businesses/${activeBusiness.id}/items`, item.id);
+          const itemDoc = await transaction.get(itemRef);
+          
+          if (!itemDoc.exists()) {
+            throw `Item ${item.name} not found!`;
+          }
+
+          const currentStock = itemDoc.data().stockQuantity || 0;
+          if (currentStock < item.qty) {
+            throw `Insufficient stock for ${item.name}. Available: ${currentStock}`;
+          }
+
+          transaction.update(itemRef, {
+            stockQuantity: increment(-item.qty)
+          });
         }
 
         const newCount = (businessDoc.data().lastInvoiceNo || 0) + 1;
@@ -311,7 +336,7 @@ export default function NewBillingScreen() {
         });
       });
 
-      const billData = {
+      billData = {
         userId: user.uid,
         businessId: activeBusiness.id,
         businessName: activeBusiness.businessName,
@@ -484,13 +509,28 @@ export default function NewBillingScreen() {
         <View style={styles.sectionHeader}>
           <Title style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>{t('selectItems') || 'Product Selection'}</Title>
         </View>
+
+        <TextInput
+          placeholder="Search items..."
+          value={itemSearchQuery}
+          onChangeText={setItemSearchQuery}
+          mode="outlined"
+          style={styles.itemSearchInput}
+          left={<TextInput.Icon icon="magnify" />}
+          outlineColor="#eee"
+          activeOutlineColor={theme.colors.primary}
+        />
+
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.itemPicker}>
-          {items.map(item => (
+          {filteredItems.map(item => (
             <TouchableOpacity key={item.id} onPress={() => addItemToBill(item)} activeOpacity={0.7}>
               <Surface style={[styles.itemChip, { backgroundColor: theme.colors.surface }]} elevation={1}>
                 <Text style={styles.chipName} numberOfLines={1}>{item.name}</Text>
                 <Text style={[styles.chipPrice, { color: theme.colors.primary }]}>₹{item.price}</Text>
-                <Badge style={[styles.chipBadge, { backgroundColor: theme.colors.primaryContainer, color: theme.colors.primary }]}>{item.gst}% GST</Badge>
+                <Badge style={[styles.chipBadge, { backgroundColor: theme.colors.primaryContainer, color: theme.colors.primary }]}>{`${item.gst}% GST`}</Badge>
+                <Text style={[styles.chipStock, { color: (item.stockQuantity || 0) <= (item.lowStockThreshold || 5) ? theme.colors.error : '#888' }]}>
+                  Stock: {item.stockQuantity || 0}
+                </Text>
               </Surface>
             </TouchableOpacity>
           ))}
@@ -614,11 +654,13 @@ const styles = StyleSheet.create({
   custOption: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(0,0,0,0.05)' },
   sectionHeader: { marginBottom: 12, paddingHorizontal: 4 },
   sectionTitle: { fontSize: 17, fontWeight: 'bold' },
+  itemSearchInput: { marginHorizontal: 4, marginBottom: 15, height: 45, backgroundColor: 'white' },
   itemPicker: { flexDirection: 'row', marginBottom: 25, paddingLeft: 4 },
-  itemChip: { padding: 15, marginRight: 14, borderRadius: 20, alignItems: 'center', minWidth: 120 },
+  itemChip: { padding: 12, marginRight: 14, borderRadius: 20, alignItems: 'center', minWidth: 120 },
   chipName: { fontWeight: 'bold', fontSize: 14, marginBottom: 2 },
-  chipPrice: { fontWeight: 'bold', fontSize: 15, marginBottom: 6 },
-  chipBadge: { borderRadius: 8, paddingHorizontal: 8 },
+  chipPrice: { fontWeight: 'bold', fontSize: 15, marginBottom: 4 },
+  chipBadge: { borderRadius: 8, paddingHorizontal: 8, marginBottom: 4 },
+  chipStock: { fontSize: 10, fontWeight: 'bold' },
   summarySurface: { padding: 18, borderRadius: 22, marginBottom: 20 },
   billItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 5 },
   billItemName: { fontWeight: 'bold', fontSize: 15 },

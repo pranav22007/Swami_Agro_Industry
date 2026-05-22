@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
-import { AuthProvider } from '../src/context/AuthContext';
+import { AuthProvider, useAuth } from '../src/context/AuthContext';
 import { BusinessProvider } from '../src/context/BusinessContext';
 import { ThemeProvider, useAppTheme } from '../src/context/ThemeContext';
 import { LanguageProvider } from '../src/context/LanguageContext';
@@ -8,9 +8,20 @@ import { PaperProvider } from 'react-native-paper';
 import * as Updates from 'expo-updates';
 import { Alert, View } from 'react-native';
 import OfflineNotice from '../src/components/OfflineNotice';
+import AppLoader from '../src/components/AppLoader';
 
 function RootApp() {
   const { theme } = useAppTheme();
+  const { loading } = useAuth();
+
+  if (loading) {
+    return (
+      <PaperProvider theme={theme}>
+        <AppLoader message="Starting Swami Agro..." />
+      </PaperProvider>
+    );
+  }
+
   return (
     <PaperProvider theme={theme}>
       <View style={{ flex: 1 }}>

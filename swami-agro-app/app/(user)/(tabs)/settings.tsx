@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, ScrollView, Switch, TouchableOpacity, Alert, Image, Dimensions } from 'react-native';
-import { Title, Text, Surface, Divider, Avatar, Button, IconButton, Modal, Portal, TextInput, RadioButton, List, Card, Badge } from 'react-native-paper';
-import { signOut } from 'firebase/auth';
-import { auth, db } from '../../../src/config/firebase';
+import { StyleSheet, View, ScrollView, Switch, TouchableOpacity, Alert, Image, Dimensions, ActivityIndicator } from 'react-native';
+import { Title, Text, Surface, Divider, Avatar, Button, IconButton, Modal, Portal, TextInput, List, Badge, Card } from 'react-native-paper';
+import { doc, updateDoc, deleteDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { db, auth } from '../../../src/config/firebase';
 import { useRouter } from 'expo-router';
 import { useBusiness } from '../../../src/context/BusinessContext';
 import { useAppTheme } from '../../../src/context/ThemeContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
-import { doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
+import * as Updates from 'expo-updates';
 
 const { width } = Dimensions.get('window');
 
@@ -23,48 +25,11 @@ export default function SettingsScreen() {
   const [cdModalVisible, setCdModalVisible] = useState(false);
   const [cdValue, setCdValue] = useState(activeBusiness?.defaultCd?.toString() || '2');
   
-  const [loading, setLoading] = useState(false);
-
-  const handleDeleteBusiness = async () => {
-    if (!activeBusiness) return;
-
-    Alert.alert(
-      'Delete Business',
-      `Are you sure you want to delete "${activeBusiness.businessName}"? This action cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive', 
-          onPress: async () => {
-            setLoading(true);
-            try {
-              // Delete from Firestore
-              await deleteDoc(doc(db, 'businesses', activeBusiness.id));
-              
-              // Find another business to switch to
-              const otherBusinesses = businesses.filter(b => b.id !== activeBusiness.id);
-              if (otherBusinesses.length > 0) {
-                setActiveBusiness(otherBusinesses[0]);
-                Alert.alert(t('success'), 'Business deleted. Switched to your next business.');
-                router.replace('/(user)/(tabs)'); // Redirect to dashboard
-              } else {
-                router.replace('/(user)/business-setup');
-              }
-            } catch (error) {
-              console.error(error);
-              Alert.alert(t('error'), 'Failed to delete business');
-            } finally {
-              setLoading(false);
-            }
-          }
-        }
-      ]
-    );
-  };
-  
   const [bankModalVisible, setBankModalVisible] = useState(false);
-  const [editingBank, setEditingBank] = useState<any>(null);
+  const [exporting, setExporting] = useState(false);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+
+  // Bank Form State
   const [bankForm, setBankForm] = useState({
     bankName: '',
     accountNumber: '',
@@ -72,138 +37,144 @@ export default function SettingsScreen() {
     branch: ''
   });
 
-  const handleLogout = async () => {
-    Alert.alert('Logout', 'Are you sure you want to exit?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Logout', onPress: async () => {
-          await signOut(auth);
-          router.replace('/');
-        }
+  const checkUpdates = async () => {
+    if (__DEV__) {
+      Alert.alert('Development Mode', 'Update check is not available in development.');
+      return;
+    }
+    
+    setCheckingUpdates(true);
+    try {
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        await Updates.fetchUpdateAsync();
+        Alert.alert(
+          'Update Available',
+          'A new minor update is available. Restart the app now to apply it?',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Restart Now', onPress: () => Updates.reloadAsync() }
+          ]
+        );
+      } else {
+        Alert.alert('Up to Date', 'You are already using the latest version of the app.');
       }
+    } catch (e) {
+      console.error(e);
+      Alert.alert('Check Failed', 'Could not check for updates at this time. Please try again later.');
+    } finally {
+      setCheckingUpdates(false);
+    }
+  };
+
+  const exportSalesCSV = async () => {
+    if (!activeBusiness?.id) return;
+    setExporting(true);
+    try {
+      const q = query(collection(db, 'transactions'), where('businessId', '==', activeBusiness.id));
+      const snapshot = await getDocs(q);
+      
+      let csv = 'Date,Invoice,Customer,Phone,Total,Payment Status\n';
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        const date = d.timestamp?.toDate().toLocaleDateString() || '';
+        csv += `${date},${d.invoiceNumber},${d.customerName},${d.customerPhone},${d.total},${d.paymentStatus || 'paid'}\n`;
+      });
+
+      // @ts-ignore
+      const fileUri = `${FileSystem.documentDirectory}sales_export_${Date.now()}.csv`;
+      // @ts-ignore
+      await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(fileUri);
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Export Failed', 'Could not export sales data.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const exportCustomersCSV = async () => {
+    if (!activeBusiness?.id) return;
+    setExporting(true);
+    try {
+      const q = query(collection(db, 'customers'), where('businessId', '==', activeBusiness.id));
+      const snapshot = await getDocs(q);
+      
+      let csv = 'Name,Phone,Address,Total Orders\n';
+      snapshot.forEach(doc => {
+        const d = doc.data();
+        csv += `${d.name},${d.phone},"${d.address || ''}",${d.totalOrders || 0}\n`;
+      });
+
+      // @ts-ignore
+      const fileUri = `${FileSystem.documentDirectory}customers_export_${Date.now()}.csv`;
+      // @ts-ignore
+      await FileSystem.writeAsStringAsync(fileUri, csv, { encoding: FileSystem.EncodingType.UTF8 });
+      await Sharing.shareAsync(fileUri);
+    } catch (error) {
+      console.error(error);
+      Alert.alert('Export Failed', 'Could not export customer data.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleLogout = () => {
+    Alert.alert(t('logout'), 'Are you sure you want to log out?', [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('logout'), onPress: () => auth.signOut(), style: 'destructive' }
     ]);
   };
 
-  const handleUpdateGst = async () => {
-    if (!activeBusiness) return;
-    setLoading(true);
+  const updateBusinessConfig = async (field: string, value: any) => {
+    if (!activeBusiness?.id) return;
     try {
-      const businessRef = doc(db, 'businesses', activeBusiness.id);
-      await updateDoc(businessRef, {
-        defaultGst: parseFloat(gstValue)
-      });
+      await updateDoc(doc(db, 'businesses', activeBusiness.id), { [field]: value });
       setGstModalVisible(false);
-      Alert.alert(t('success'), t('gstUpdated'));
-    } catch (error) {
-      console.error(error);
-      Alert.alert(t('error'), t('updateFailed'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleUpdateCd = async () => {
-    if (!activeBusiness) return;
-    setLoading(true);
-    try {
-      const businessRef = doc(db, 'businesses', activeBusiness.id);
-      await updateDoc(businessRef, {
-        defaultCd: parseFloat(cdValue)
-      });
       setCdModalVisible(false);
-      Alert.alert(t('success'), 'CD percentage updated successfully');
-    } catch (error) {
-      console.error(error);
+    } catch (err) {
       Alert.alert(t('error'), t('updateFailed'));
-    } finally {
-      setLoading(false);
     }
   };
 
-  const handleSaveBank = async () => {
-    if (!activeBusiness) return;
+  const addBankDetail = async () => {
+    if (!activeBusiness?.id) return;
     if (!bankForm.bankName || !bankForm.accountNumber) {
-      Alert.alert(t('error'), 'Bank Name and Account Number are required');
+      Alert.alert('Error', 'Please enter bank name and account number');
       return;
     }
 
-    setLoading(true);
     try {
-      const businessRef = doc(db, 'businesses', activeBusiness.id);
-      let updatedBanks = [...(activeBusiness.banks || [])];
-      
-      if (editingBank !== null) {
-        updatedBanks[editingBank] = bankForm;
-      } else {
-        updatedBanks.push(bankForm);
-      }
-
-      await updateDoc(businessRef, { banks: updatedBanks });
-      setBankModalVisible(false);
-      setEditingBank(null);
+      const currentBanks = activeBusiness.banks || [];
+      const updatedBanks = [...currentBanks, bankForm];
+      await updateDoc(doc(db, 'businesses', activeBusiness.id), { banks: updatedBanks });
       setBankForm({ bankName: '', accountNumber: '', ifscCode: '', branch: '' });
-    } catch (error) {
-      console.error(error);
-      Alert.alert(t('error'), 'Failed to update bank details');
-    } finally {
-      setLoading(false);
+      Alert.alert('Success', 'Bank details added successfully');
+    } catch (err) {
+      Alert.alert('Error', 'Failed to add bank details');
     }
   };
 
-  const deleteBank = async (index: number) => {
-    if (!activeBusiness) return;
-    Alert.alert('Delete Bank', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete', style: 'destructive', onPress: async () => {
-          const businessRef = doc(db, 'businesses', activeBusiness.id);
-          let updatedBanks = activeBusiness.banks.filter((_: any, i: number) => i !== index);
-          await updateDoc(businessRef, { banks: updatedBanks });
-        }
-      }
-    ]);
-  };
-
-  const openEditBank = (bank: any, index: number) => {
-    setEditingBank(index);
-    setBankForm(bank);
-    setBankModalVisible(true);
+  const deleteBankDetail = async (index: number) => {
+    if (!activeBusiness?.id) return;
+    try {
+      const updatedBanks = activeBusiness.banks.filter((_: any, i: number) => i !== index);
+      await updateDoc(doc(db, 'businesses', activeBusiness.id), { banks: updatedBanks });
+    } catch (err) {
+      Alert.alert('Error', 'Failed to delete bank detail');
+    }
   };
 
   return (
     <View style={[styles.container, { backgroundColor: theme.colors.background }]}>
-      <Surface style={[styles.header, { backgroundColor: theme.colors.surface }]} elevation={2}>
+      <Surface style={[styles.header, { backgroundColor: theme.colors.surface }]} elevation={4}>
         <Title style={[styles.headerTitle, { color: theme.colors.primary }]}>{t('settings')}</Title>
       </Surface>
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* User/Business Profile Section */}
-        <Surface style={[styles.profileCard, { backgroundColor: theme.colors.surface }]} elevation={1}>
-          <View style={styles.profileInfo}>
-            {activeBusiness?.photoUrl ? (
-              <Image source={{ uri: activeBusiness.photoUrl }} style={styles.profileAvatar} />
-            ) : (
-              <Surface style={[styles.profileAvatarPlaceholder, { backgroundColor: theme.colors.primaryContainer }]} elevation={1}>
-                <IconButton icon="store" size={30} iconColor={theme.colors.primary} />
-              </Surface>
-            )}
-            <View style={styles.profileText}>
-              <Text style={[styles.bizName, { color: theme.colors.onSurface }]}>{activeBusiness?.businessName}</Text>
-              <Text style={[styles.ownerName, { color: theme.colors.onSurfaceVariant }]}>{activeBusiness?.ownerName}</Text>
-            </View>
-          </View>
-          <Divider style={styles.profileDivider} />
-          <Button 
-            mode="contained" 
-            onPress={() => router.push({ pathname: '/(user)/business-setup', params: { edit: 'true', id: activeBusiness?.id } })}
-            style={styles.editProfileBtn}
-            icon="pencil-outline"
-          >
-            Edit Business Profile
-          </Button>
-        </Surface>
-
-        {/* App Settings Section */}
+      <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.colors.primary }]}>App Preferences</Text>
+          <Text style={[styles.sectionTitle, { color: theme.colors.primary }]}>{t('appearance')}</Text>
         </View>
         <Card style={styles.settingsCard} elevation={1}>
           <Card.Content style={styles.cardContent}>
@@ -212,23 +183,18 @@ export default function SettingsScreen() {
                 <IconButton icon="theme-light-dark" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
                 <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>{t('darkMode')}</Text>
               </View>
-              <Switch value={isDarkMode} onValueChange={toggleTheme} color={theme.colors.primary} />
+              <Switch value={isDarkMode} onValueChange={toggleTheme} thumbColor={isDarkMode ? theme.colors.primary : '#f4f3f4'} trackColor={{ false: '#767577', true: theme.colors.primaryContainer }} />
             </View>
             <Divider style={styles.itemDivider} />
-            <View style={[styles.settingItem, { paddingBottom: 5 }]}>
-              <View style={styles.settingLeft}>
-                <IconButton icon="translate" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
-                <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>{t('language')}</Text>
+            <TouchableOpacity onPress={() => router.push('/(user)/settings/language')}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="translate" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>{t('language')}</Text>
+                </View>
+                <Text style={{ fontWeight: 'bold', color: theme.colors.primary }}>{language === 'en' ? 'English' : 'मराठी'}</Text>
               </View>
-              <View style={styles.langSelector}>
-                <TouchableOpacity onPress={() => setLanguage('en')} style={[styles.langBtn, language === 'en' && { backgroundColor: theme.colors.primaryContainer }]}>
-                  <Text style={[styles.langBtnText, language === 'en' && { color: theme.colors.primary, fontWeight: 'bold' }]}>EN</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => setLanguage('mr')} style={[styles.langBtn, language === 'mr' && { backgroundColor: theme.colors.primaryContainer }]}>
-                  <Text style={[styles.langBtnText, language === 'mr' && { color: theme.colors.primary, fontWeight: 'bold' }]}>मराठी</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            </TouchableOpacity>
           </Card.Content>
         </Card>
 
@@ -264,110 +230,170 @@ export default function SettingsScreen() {
                   <IconButton icon="bank-outline" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
                   <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>{t('bankDetails')}</Text>
                 </View>
-                <Badge style={{ backgroundColor: theme.colors.primaryContainer, color: theme.colors.primary }}>{activeBusiness?.banks?.length || 0}</Badge>
+                <Badge 
+                  style={{ backgroundColor: theme.colors.primaryContainer, color: theme.colors.primary }}
+                  size={22}
+                >
+                  {activeBusiness?.banks?.length || 0}
+                </Badge>
               </View>
             </TouchableOpacity>
           </Card.Content>
         </Card>
 
-        {/* Bank List View */}
-        {activeBusiness?.banks && activeBusiness.banks.length > 0 && (
-          <Surface style={[styles.bankList, { backgroundColor: theme.colors.surface }]} elevation={1}>
-            <Text style={styles.listSubTitle}>Saved Bank Accounts</Text>
-            {activeBusiness.banks.map((bank: any, index: number) => (
-              <View key={index}>
-                <View style={styles.bankItem}>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.bankNameText}>{bank.bankName}</Text>
-                    <Text style={styles.bankDetailText}>{bank.accountNumber} • {bank.branch}</Text>
-                  </View>
-                  <View style={styles.bankActions}>
-                    <IconButton icon="pencil-outline" size={18} iconColor={theme.colors.primary} onPress={() => openEditBank(bank, index)} />
-                    <IconButton icon="delete-outline" size={18} iconColor={theme.colors.error} onPress={() => deleteBank(index)} />
-                  </View>
+        {/* Data Export Section */}
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, { color: theme.colors.primary }]}>Data & Exports</Text>
+        </View>
+        <Card style={styles.settingsCard} elevation={1}>
+          <Card.Content style={styles.cardContent}>
+            <TouchableOpacity onPress={exportSalesCSV} disabled={exporting}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="file-export-outline" size={24} iconColor="#00796B" style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>Export Sales (CSV)</Text>
                 </View>
-                {index < activeBusiness.banks.length - 1 && <Divider />}
+                {exporting ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <IconButton icon="chevron-right" size={20} />}
               </View>
-            ))}
-          </Surface>
-        )}
+            </TouchableOpacity>
+            <Divider style={styles.itemDivider} />
+            <TouchableOpacity onPress={exportCustomersCSV} disabled={exporting}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="account-arrow-right-outline" size={24} iconColor="#00796B" style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>Export Customers (CSV)</Text>
+                </View>
+                {exporting ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <IconButton icon="chevron-right" size={20} />}
+              </View>
+            </TouchableOpacity>
+          </Card.Content>
+        </Card>
 
-        <Button 
-          mode="contained" 
-          onPress={handleDeleteBusiness} 
-          style={styles.deleteBtn} 
-          buttonColor={theme.colors.surfaceVariant}
-          textColor={theme.colors.error}
-          icon="delete-outline"
-          loading={loading}
-        >
-          Delete This Business
-        </Button>
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, { color: theme.colors.primary }]}>Account</Text>
+        </View>
+        <Card style={styles.settingsCard} elevation={1}>
+          <Card.Content style={styles.cardContent}>
+            <TouchableOpacity onPress={() => router.push({ pathname: '/(user)/business-setup', params: { edit: 'true', id: activeBusiness?.id } })}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="store-edit-outline" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>{t('manageBusiness')}</Text>
+                </View>
+                <IconButton icon="chevron-right" size={20} />
+              </View>
+            </TouchableOpacity>
+            <Divider style={styles.itemDivider} />
+            
+            <TouchableOpacity onPress={checkUpdates} disabled={checkingUpdates}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="update" size={24} iconColor={theme.colors.primary} style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.onSurface }]}>Check for Updates</Text>
+                </View>
+                {checkingUpdates ? <ActivityIndicator size="small" color={theme.colors.primary} /> : <IconButton icon="chevron-right" size={20} />}
+              </View>
+            </TouchableOpacity>
+            <Divider style={styles.itemDivider} />
 
-        <Button 
-          mode="contained" 
-          onPress={handleLogout} 
-          style={styles.logoutBtn} 
-          buttonColor={theme.colors.error}
-          icon="logout"
-          contentStyle={{ paddingVertical: 5 }}
-        >
-          Logout Session
-        </Button>
-        
-        <Text style={styles.versionText}>Swami Agro Industry v1.2.0</Text>
-        <View style={{ height: 40 }} />
+            <TouchableOpacity onPress={handleLogout}>
+              <View style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <IconButton icon="logout" size={24} iconColor={theme.colors.error} style={styles.settingIcon} />
+                  <Text style={[styles.settingText, { color: theme.colors.error, fontWeight: 'bold' }]}>{t('logout')}</Text>
+                </View>
+              </View>
+            </TouchableOpacity>
+          </Card.Content>
+        </Card>
+
+        <View style={styles.versionInfo}>
+          <Text style={[styles.versionText, { color: theme.colors.onSurfaceVariant }]}>{t('version')} 2.1.0 (Premium)</Text>
+          <Text style={[styles.versionText, { color: theme.colors.onSurfaceVariant }]}>{t('build')} 2026.05.22</Text>
+        </View>
       </ScrollView>
 
-      {/* Modals for Settings */}
+      {/* Portals */}
       <Portal>
         {/* GST Modal */}
         <Modal visible={gstModalVisible} onDismiss={() => setGstModalVisible(false)} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
           <Title style={styles.modalTitle}>{t('gstSettings')}</Title>
-          <Divider style={{ marginBottom: 20 }} />
-          <TextInput
-            label={t('gstPercentage')}
-            value={gstValue}
-            onChangeText={setGstValue}
-            keyboardType="numeric"
-            mode="outlined"
-            style={styles.modalInput}
-            outlineColor="#eee"
-            activeOutlineColor={theme.colors.primary}
-          />
-          <Button mode="contained" onPress={handleUpdateGst} loading={loading} style={styles.modalBtn}>Update</Button>
-          <Button mode="text" onPress={() => setGstModalVisible(false)}>Cancel</Button>
+          <TextInput label={t('gstPercentage')} value={gstValue} onChangeText={setGstValue} keyboardType="numeric" mode="outlined" style={styles.modalInput} />
+          <Button mode="contained" onPress={() => updateBusinessConfig('defaultGst', parseFloat(gstValue))} style={styles.modalBtn}>
+            {t('save')}
+          </Button>
         </Modal>
-
+        
         {/* CD Modal */}
         <Modal visible={cdModalVisible} onDismiss={() => setCdModalVisible(false)} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
-          <Title style={styles.modalTitle}>CD Settings</Title>
-          <Divider style={{ marginBottom: 20 }} />
-          <TextInput
-            label="CD Percentage (%)"
-            value={cdValue}
-            onChangeText={setCdValue}
-            keyboardType="numeric"
-            mode="outlined"
-            style={styles.modalInput}
-            outlineColor="#eee"
-            activeOutlineColor={theme.colors.primary}
-          />
-          <Button mode="contained" onPress={handleUpdateCd} loading={loading} style={styles.modalBtn}>Update CD</Button>
-          <Button mode="text" onPress={() => setCdModalVisible(false)}>Cancel</Button>
+          <Title style={styles.modalTitle}>Cash Discount (CD) Settings</Title>
+          <TextInput label="Default CD Percentage" value={cdValue} onChangeText={setCdValue} keyboardType="numeric" mode="outlined" style={styles.modalInput} />
+          <Button mode="contained" onPress={() => updateBusinessConfig('defaultCd', parseFloat(cdValue))} style={styles.modalBtn}>
+            {t('save')}
+          </Button>
         </Modal>
 
-        {/* Bank Modal */}
-        <Modal visible={bankModalVisible} onDismiss={() => { setBankModalVisible(false); setEditingBank(null); }} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface }]}>
-          <Title style={styles.modalTitle}>{editingBank !== null ? 'Edit Bank Account' : 'Add Bank Account'}</Title>
-          <Divider style={{ marginBottom: 20 }} />
+        {/* Bank Details Modal */}
+        <Modal visible={bankModalVisible} onDismiss={() => setBankModalVisible(false)} contentContainerStyle={[styles.modal, { backgroundColor: theme.colors.surface, maxHeight: '85%' }]}>
+          <Title style={styles.modalTitle}>{t('bankDetails')}</Title>
           <ScrollView showsVerticalScrollIndicator={false}>
-            <TextInput label="Bank Name" value={bankForm.bankName} onChangeText={v => setBankForm({ ...bankForm, bankName: v })} mode="outlined" style={styles.modalInput} outlineColor="#eee" activeOutlineColor={theme.colors.primary} />
-            <TextInput label="Account Number" value={bankForm.accountNumber} onChangeText={v => setBankForm({ ...bankForm, accountNumber: v })} mode="outlined" style={styles.modalInput} outlineColor="#eee" activeOutlineColor={theme.colors.primary} />
-            <TextInput label="IFSC Code" value={bankForm.ifscCode} onChangeText={v => setBankForm({ ...bankForm, ifscCode: v })} mode="outlined" style={styles.modalInput} outlineColor="#eee" activeOutlineColor={theme.colors.primary} />
-            <TextInput label="Branch Name" value={bankForm.branch} onChangeText={v => setBankForm({ ...bankForm, branch: v })} mode="outlined" style={styles.modalInput} outlineColor="#eee" activeOutlineColor={theme.colors.primary} />
-            <Button mode="contained" onPress={handleSaveBank} loading={loading} style={styles.modalBtn}>Save Details</Button>
-            <Button mode="text" onPress={() => { setBankModalVisible(false); setEditingBank(null); }}>Cancel</Button>
+            {activeBusiness?.banks?.map((bank: any, idx: number) => (
+              <Surface key={idx} style={[styles.bankItem, { backgroundColor: theme.colors.surfaceVariant }]} elevation={0}>
+                <View style={styles.bankItemText}>
+                  <Text style={styles.bankNameText}>{bank.bankName}</Text>
+                  <Text style={styles.bankAccountText}>{bank.accountNumber}</Text>
+                  <Text style={styles.bankMetaText}>{`${bank.ifscCode} • ${bank.branch}`}</Text>
+                </View>
+                <IconButton 
+                  icon="delete-outline" 
+                  iconColor={theme.colors.error} 
+                  size={22} 
+                  onPress={() => deleteBankDetail(idx)} 
+                  style={styles.bankDeleteIcon}
+                />
+              </Surface>
+            ))}
+
+            <Divider style={{ marginVertical: 15 }} />
+            <Text style={{ fontWeight: 'bold', marginBottom: 10 }}>Add New Bank</Text>
+            
+            <TextInput 
+              label="Bank Name" 
+              value={bankForm.bankName} 
+              onChangeText={v => setBankForm({ ...bankForm, bankName: v })} 
+              mode="outlined" 
+              style={styles.modalInput} 
+            />
+            <TextInput 
+              label="Account Number" 
+              value={bankForm.accountNumber} 
+              onChangeText={v => setBankForm({ ...bankForm, accountNumber: v })} 
+              mode="outlined" 
+              style={styles.modalInput} 
+              keyboardType="numeric"
+            />
+            <TextInput 
+              label="IFSC Code" 
+              value={bankForm.ifscCode} 
+              onChangeText={v => setBankForm({ ...bankForm, ifscCode: v.toUpperCase() })} 
+              mode="outlined" 
+              style={styles.modalInput} 
+              autoCapitalize="characters"
+            />
+            <TextInput 
+              label="Branch" 
+              value={bankForm.branch} 
+              onChangeText={v => setBankForm({ ...bankForm, branch: v })} 
+              mode="outlined" 
+              style={styles.modalInput} 
+            />
+            
+            <Button mode="contained" onPress={addBankDetail} style={styles.modalBtn}>
+              Add Bank
+            </Button>
+            <Button mode="text" onPress={() => setBankModalVisible(false)}>
+              Close
+            </Button>
           </ScrollView>
         </Modal>
       </Portal>
@@ -377,41 +403,28 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  header: { paddingTop: 50, paddingBottom: 15, paddingHorizontal: 20, borderBottomLeftRadius: 25, borderBottomRightRadius: 25, zIndex: 10 },
-  headerTitle: { fontSize: 22, fontWeight: 'bold' },
-  content: { padding: 18 },
-  profileCard: { padding: 20, borderRadius: 24, marginBottom: 25 },
-  profileInfo: { flexDirection: 'row', alignItems: 'center', marginBottom: 15 },
-  profileAvatar: { width: 60, height: 60, borderRadius: 18 },
-  profileAvatarPlaceholder: { width: 60, height: 60, borderRadius: 18, justifyContent: 'center', alignItems: 'center' },
-  profileText: { marginLeft: 15, flex: 1 },
-  bizName: { fontSize: 18, fontWeight: 'bold' },
-  ownerName: { fontSize: 14 },
-  profileDivider: { marginVertical: 12, opacity: 0.5 },
-  editProfileBtn: { borderRadius: 12, elevation: 0 },
-  sectionHeader: { marginBottom: 10, paddingLeft: 5 },
-  sectionTitle: { fontSize: 12, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1, color: '#888' },
-  settingsCard: { borderRadius: 22, marginBottom: 25, overflow: 'hidden' },
-  cardContent: { paddingHorizontal: 5 },
-  settingItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 12, paddingHorizontal: 10 },
+  header: { paddingTop: 55, paddingBottom: 20, paddingHorizontal: 20, borderBottomLeftRadius: 30, borderBottomRightRadius: 30 },
+  headerTitle: { fontSize: 24, fontWeight: 'bold' },
+  content: { padding: 20 },
+  sectionHeader: { marginBottom: 10, marginLeft: 5 },
+  sectionTitle: { fontSize: 13, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
+  settingsCard: { borderRadius: 20, marginBottom: 25, overflow: 'hidden' },
+  cardContent: { paddingVertical: 5 },
+  settingItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 4 },
   settingLeft: { flexDirection: 'row', alignItems: 'center' },
-  settingIcon: { margin: 0, marginRight: 12 },
-  settingText: { fontSize: 15, fontWeight: '500' },
-  itemDivider: { marginHorizontal: 15, opacity: 0.5 },
-  langSelector: { flexDirection: 'row', backgroundColor: '#f5f5f5', borderRadius: 10, padding: 3 },
-  langBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
-  langBtnText: { fontSize: 12, color: '#666' },
-  bankList: { borderRadius: 20, padding: 15, marginBottom: 25 },
-  listSubTitle: { fontSize: 11, fontWeight: 'bold', color: '#888', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 1 },
-  bankItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12 },
-  bankNameText: { fontWeight: 'bold', fontSize: 15 },
-  bankDetailText: { fontSize: 12, color: '#666', marginTop: 2 },
-  bankActions: { flexDirection: 'row' },
-  deleteBtn: { marginTop: 20, marginBottom: 12, borderRadius: 15, borderWidth: 1, borderColor: 'rgba(255,0,0,0.1)' },
-  logoutBtn: { marginTop: 10, borderRadius: 15, elevation: 2 },
-  versionText: { textAlign: 'center', marginTop: 30, color: '#aaa', fontSize: 12 },
-  modal: { padding: 25, margin: 20, borderRadius: 30, maxHeight: '80%' },
+  settingIcon: { marginRight: 5 },
+  settingText: { fontSize: 16, fontWeight: '500' },
+  itemDivider: { opacity: 0.1, marginHorizontal: 15 },
+  versionInfo: { alignItems: 'center', marginTop: 10, marginBottom: 40 },
+  versionText: { fontSize: 12, opacity: 0.6 },
+  modal: { padding: 25, margin: 20, borderRadius: 28, maxHeight: '80%' },
   modalTitle: { textAlign: 'center', fontWeight: 'bold', fontSize: 20, marginBottom: 15 },
   modalInput: { marginBottom: 15, backgroundColor: 'transparent' },
-  modalBtn: { marginTop: 10, borderRadius: 12, paddingVertical: 5 }
+  modalBtn: { marginTop: 10, borderRadius: 12, paddingVertical: 5 },
+  bankItem: { padding: 15, borderRadius: 16, flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  bankItemText: { flex: 1 },
+  bankNameText: { fontSize: 16, fontWeight: 'bold', color: '#333' },
+  bankAccountText: { fontSize: 14, color: '#555', marginTop: 2 },
+  bankMetaText: { fontSize: 12, color: '#888', marginTop: 2 },
+  bankDeleteIcon: { margin: 0, marginRight: -5 }
 });

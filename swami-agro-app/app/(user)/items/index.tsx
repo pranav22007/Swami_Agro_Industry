@@ -17,10 +17,19 @@ export default function ItemsScreen() {
   const [loading, setLoading] = useState(true);
   const [modalVisible, setModalVisible] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
-  const [form, setForm] = useState({ name: '', price: '', gst: '18' });
+  
+  const initialForm = { 
+    name: '', 
+    price: '', 
+    gst: '18', 
+    stockQuantity: '0', 
+    lowStockThreshold: '5' 
+  };
+  
+  const [form, setForm] = useState(initialForm);
 
   useEffect(() => {
-    if (!activeBusiness) return;
+    if (!activeBusiness?.id) return;
 
     const q = query(collection(db, `businesses/${activeBusiness.id}/items`));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -31,7 +40,7 @@ export default function ItemsScreen() {
     });
 
     return unsubscribe;
-  }, [activeBusiness]);
+  }, [activeBusiness?.id]);
 
   const handleSave = async () => {
     if (!form.name || !form.price) {
@@ -39,34 +48,38 @@ export default function ItemsScreen() {
       return;
     }
 
+    if (!activeBusiness?.id) {
+      Alert.alert(t('error'), 'No active business');
+      return;
+    }
+
     try {
+      const itemData = {
+        ...form,
+        price: parseFloat(form.price),
+        gst: parseFloat(form.gst),
+        stockQuantity: parseFloat(form.stockQuantity || '0'),
+        lowStockThreshold: parseFloat(form.lowStockThreshold || '5')
+      };
+
       if (editingItem) {
-        await updateDoc(doc(db, `businesses/${activeBusiness.id}/items`, editingItem.id), {
-          ...form,
-          price: parseFloat(form.price),
-          gst: parseFloat(form.gst)
-        });
+        await updateDoc(doc(db, `businesses/${activeBusiness.id}/items`, editingItem.id), itemData);
       } else {
-        await addDoc(collection(db, `businesses/${activeBusiness.id}/items`), {
-          ...form,
-          price: parseFloat(form.price),
-          gst: parseFloat(form.gst)
-        });
+        await addDoc(collection(db, `businesses/${activeBusiness.id}/items`), itemData);
       }
       setModalVisible(false);
-      setForm({ name: '', price: '', gst: '18' });
+      setForm(initialForm);
       setEditingItem(null);
     } catch (error) {
       console.error('Offline sync queued:', error);
-      // We don't alert here because Firestore handles offline persistence automatically.
-      // The UI will update immediately and sync when back online.
       setModalVisible(false);
-      setForm({ name: '', price: '', gst: '18' });
+      setForm(initialForm);
       setEditingItem(null);
     }
   };
 
   const deleteItem = (id: string) => {
+    if (!activeBusiness?.id) return;
     Alert.alert(t('delete'), 'Are you sure?', [
       { text: t('cancel'), style: 'cancel' },
       { text: t('delete'), onPress: async () => await deleteDoc(doc(db, `businesses/${activeBusiness.id}/items`, id)) }
@@ -75,7 +88,13 @@ export default function ItemsScreen() {
 
   const openEdit = (item: any) => {
     setEditingItem(item);
-    setForm({ name: item.name, price: item.price.toString(), gst: item.gst.toString() });
+    setForm({ 
+      name: item.name, 
+      price: item.price.toString(), 
+      gst: item.gst.toString(),
+      stockQuantity: (item.stockQuantity || 0).toString(),
+      lowStockThreshold: (item.lowStockThreshold || 5).toString()
+    });
     setModalVisible(true);
   };
 
@@ -110,7 +129,15 @@ export default function ItemsScreen() {
                   <Text style={[styles.itemName, { color: theme.colors.onSurface }]} numberOfLines={1}>{item.name}</Text>
                   <View style={styles.priceRow}>
                     <Text style={[styles.itemPrice, { color: theme.colors.primary }]}>₹{item.price.toLocaleString('en-IN')}</Text>
-                    <Badge style={[styles.gstBadge, { backgroundColor: theme.colors.secondaryContainer, color: theme.colors.secondary }]}>{item.gst}% GST</Badge>
+                    <Badge style={[styles.gstBadge, { backgroundColor: theme.colors.secondaryContainer, color: theme.colors.secondary }]}>{`${item.gst}% GST`}</Badge>
+                  </View>
+                  <View style={styles.stockRow}>
+                    <Text style={[styles.stockText, { color: (item.stockQuantity || 0) <= (item.lowStockThreshold || 5) ? theme.colors.error : theme.colors.onSurfaceVariant }]}>
+                      Stock: {item.stockQuantity || 0} units
+                    </Text>
+                    {(item.stockQuantity || 0) <= (item.lowStockThreshold || 5) && (
+                      <Badge style={styles.lowStockBadge}>LOW STOCK</Badge>
+                    )}
                   </View>
                 </View>
               </View>
@@ -138,7 +165,7 @@ export default function ItemsScreen() {
         icon="plus"
         style={[styles.fab, { backgroundColor: theme.colors.primary }]}
         color="white"
-        onPress={() => { setEditingItem(null); setForm({ name: '', price: '', gst: '18' }); setModalVisible(true); }}
+        onPress={() => { setEditingItem(null); setForm(initialForm); setModalVisible(true); }}
         label="Add Item"
       />
 
@@ -181,6 +208,35 @@ export default function ItemsScreen() {
                   placeholder="18"
                   value={form.gst}
                   onChangeText={(v) => setForm({ ...form, gst: v })}
+                  keyboardType="numeric"
+                  mode="outlined"
+                  style={styles.input}
+                  outlineColor="#e0e0e0"
+                  activeOutlineColor={theme.colors.primary}
+                />
+              </View>
+            </View>
+
+            <View style={styles.formRow}>
+              <View style={[styles.formGroup, { flex: 1, marginRight: 10 }]}>
+                <Text style={styles.inputLabel}>Stock Quantity</Text>
+                <TextInput
+                  placeholder="0"
+                  value={form.stockQuantity}
+                  onChangeText={(v) => setForm({ ...form, stockQuantity: v })}
+                  keyboardType="numeric"
+                  mode="outlined"
+                  style={styles.input}
+                  outlineColor="#e0e0e0"
+                  activeOutlineColor={theme.colors.primary}
+                />
+              </View>
+              <View style={[styles.formGroup, { flex: 1 }]}>
+                <Text style={styles.inputLabel}>Low Stock Alert At</Text>
+                <TextInput
+                  placeholder="5"
+                  value={form.lowStockThreshold}
+                  onChangeText={(v) => setForm({ ...form, lowStockThreshold: v })}
                   keyboardType="numeric"
                   mode="outlined"
                   style={styles.input}
@@ -245,6 +301,9 @@ const styles = StyleSheet.create({
   priceRow: { flexDirection: 'row', alignItems: 'center' },
   itemPrice: { fontSize: 16, fontWeight: '800', marginRight: 10 },
   gstBadge: { borderRadius: 6, fontWeight: 'bold', paddingHorizontal: 6 },
+  stockRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  stockText: { fontSize: 12, fontWeight: '600' },
+  lowStockBadge: { marginLeft: 8, height: 20, fontSize: 10, textAlignVertical: 'center', backgroundColor: '#FFEBEE', color: '#D32F2F', fontWeight: 'bold' },
   itemActions: { flexDirection: 'row', alignItems: 'center' },
   actionCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#f5f5f5', justifyContent: 'center', alignItems: 'center' },
   fab: { position: 'absolute', margin: 20, right: 0, bottom: 20, borderRadius: 20, elevation: 4 },

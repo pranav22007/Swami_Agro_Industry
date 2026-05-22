@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, ScrollView, Dimensions, ActivityIndicator, TouchableOpacity } from 'react-native';
-import { Title, Text, Surface, IconButton, Card, useTheme } from 'react-native-paper';
+import { Title, Text, Surface, IconButton, Card, useTheme, Divider } from 'react-native-paper';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/config/firebase';
 import { useBusiness } from '../../src/context/BusinessContext';
@@ -8,6 +8,7 @@ import { useAppTheme } from '../../src/context/ThemeContext';
 import { useLanguage } from '../../src/context/LanguageContext';
 import { LineChart } from 'react-native-chart-kit';
 import { useRouter } from 'expo-router';
+import AppLoader from '../../src/components/AppLoader';
 
 const { width } = Dimensions.get('window');
 
@@ -24,20 +25,22 @@ export default function AnalyticsScreen() {
   const [stats, setStats] = useState({
     totalIncome: 0,
     totalOrders: 0,
-    avgOrderValue: 0
+    avgOrderValue: 0,
+    totalExpenses: 0,
+    netProfit: 0,
+    topProducts: [] as any[]
   });
 
   useEffect(() => {
-    if (!activeBusiness) return;
+    if (!activeBusiness?.id) return;
 
-    const q = query(
-      collection(db, 'transactions'),
-      where('businessId', '==', activeBusiness.id)
-    );
+    const qTransactions = query(collection(db, 'transactions'), where('businessId', '==', activeBusiness.id));
+    const qExpenses = query(collection(db, 'expenses'), where('businessId', '==', activeBusiness.id));
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeTransactions = onSnapshot(qTransactions, (snapshot) => {
       const dailyData: { [key: string]: number } = {};
       let total = 0;
+      let productMap: any = {};
 
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -46,9 +49,25 @@ export default function AnalyticsScreen() {
         
         dailyData[dateKey] = (dailyData[dateKey] || 0) + (data.total || 0);
         total += (data.total || 0);
+
+        // Count products
+        if (data.items && Array.isArray(data.items)) {
+          data.items.forEach((item: any) => {
+            if (productMap[item.name]) {
+              productMap[item.name].qty += item.qty;
+              productMap[item.name].revenue += (item.price * item.qty * (1 + (item.gst || 0)/100));
+            } else {
+              productMap[item.name] = {
+                name: item.name,
+                qty: item.qty,
+                revenue: (item.price * item.qty * (1 + (item.gst || 0)/100))
+              };
+            }
+          });
+        }
       });
 
-      // Get last 7 days or entries
+      // Get last 7 days for chart
       const sortedKeys = Object.keys(dailyData).sort((a, b) => {
         return new Date(a).getTime() - new Date(b).getTime();
       }).slice(-7);
@@ -61,24 +80,41 @@ export default function AnalyticsScreen() {
         datasets: [{ data }]
       });
 
-      setStats({
+      const topProds = Object.values(productMap)
+        .sort((a: any, b: any) => b.revenue - a.revenue)
+        .slice(0, 5);
+
+      setStats(prev => ({
+        ...prev,
         totalIncome: total,
         totalOrders: snapshot.size,
-        avgOrderValue: snapshot.size > 0 ? total / snapshot.size : 0
-      });
+        avgOrderValue: snapshot.size > 0 ? total / snapshot.size : 0,
+        topProducts: topProds,
+        netProfit: total - prev.totalExpenses
+      }));
+    });
 
+    const unsubscribeExpenses = onSnapshot(qExpenses, (snapshot) => {
+      let totalExp = 0;
+      snapshot.forEach(doc => {
+        totalExp += doc.data().amount || 0;
+      });
+      setStats(prev => ({ 
+        ...prev, 
+        totalExpenses: totalExp,
+        netProfit: prev.totalIncome - totalExp
+      }));
       setLoading(false);
     });
 
-    return unsubscribe;
-  }, [activeBusiness]);
+    return () => {
+      unsubscribeTransactions();
+      unsubscribeExpenses();
+    };
+  }, [activeBusiness?.id]);
 
   if (loading) {
-    return (
-      <View style={[styles.centered, { backgroundColor: theme.colors.background }]}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
+    return <AppLoader message={t('loading') || 'Loading...'} />;
   }
 
   return (
@@ -138,6 +174,48 @@ export default function AnalyticsScreen() {
             theme={theme}
           />
         </View>
+
+        <View style={styles.sectionHeader}>
+          <Title style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Financial Summary</Title>
+        </View>
+        <Surface style={[styles.summarySurface, { backgroundColor: theme.colors.surface }]} elevation={1}>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Total Income</Text>
+            <Text style={[styles.summaryValue, { color: '#2E7D32' }]}>+ ₹{stats.totalIncome.toLocaleString('en-IN')}</Text>
+          </View>
+          <View style={styles.summaryRow}>
+            <Text style={styles.summaryLabel}>Total Expenses</Text>
+            <Text style={[styles.summaryValue, { color: theme.colors.error }]}>- ₹{stats.totalExpenses.toLocaleString('en-IN')}</Text>
+          </View>
+          <Divider style={{ marginVertical: 10 }} />
+          <View style={styles.summaryRow}>
+            <Text style={[styles.summaryLabel, { fontWeight: 'bold' }]}>Net Profit</Text>
+            <Text style={[styles.summaryValue, { fontWeight: 'bold', color: theme.colors.primary, fontSize: 20 }]}>₹{stats.netProfit.toLocaleString('en-IN')}</Text>
+          </View>
+        </Surface>
+
+        <View style={styles.sectionHeader}>
+          <Title style={[styles.sectionTitle, { color: theme.colors.onSurface }]}>Top Selling Products</Title>
+        </View>
+        <Surface style={[styles.topProductsSurface, { backgroundColor: theme.colors.surface }]} elevation={1}>
+          {stats.topProducts.length > 0 ? stats.topProducts.map((prod, index) => (
+            <View key={index}>
+              <View style={styles.productRow}>
+                <View style={[styles.rankBadge, { backgroundColor: theme.colors.primaryContainer }]}>
+                  <Text style={[styles.rankText, { color: theme.colors.primary }]}>{index + 1}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.productName}>{prod.name}</Text>
+                  <Text style={styles.productMeta}>{prod.qty} units sold</Text>
+                </View>
+                <Text style={styles.productRevenue}>₹{Math.round(prod.revenue).toLocaleString('en-IN')}</Text>
+              </View>
+              {index < stats.topProducts.length - 1 && <Divider style={{ marginVertical: 8, opacity: 0.3 }} />}
+            </View>
+          )) : (
+            <Text style={{ textAlign: 'center', color: theme.colors.onSurfaceVariant, padding: 20 }}>No product data available</Text>
+          )}
+        </Surface>
       </ScrollView>
     </View>
   );
@@ -162,4 +240,17 @@ const styles = StyleSheet.create({
   statBox: { width: (width - 60) / 2, padding: 15, borderRadius: 20, marginBottom: 15, alignItems: 'center' },
   statLabel: { fontSize: 12, fontWeight: '600', textTransform: 'uppercase', textAlign: 'center' },
   statValue: { fontSize: 18, fontWeight: 'bold', marginTop: 5 },
+  sectionHeader: { marginTop: 10, marginBottom: 15, paddingHorizontal: 5 },
+  sectionTitle: { fontSize: 18, fontWeight: 'bold' },
+  summarySurface: { padding: 20, borderRadius: 24, marginBottom: 25 },
+  summaryRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 4 },
+  summaryLabel: { fontSize: 14, color: '#666' },
+  summaryValue: { fontSize: 16, fontWeight: '600' },
+  topProductsSurface: { padding: 15, borderRadius: 24, marginBottom: 40 },
+  productRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8 },
+  rankBadge: { width: 32, height: 32, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  rankText: { fontWeight: 'bold', fontSize: 14 },
+  productName: { fontSize: 15, fontWeight: 'bold' },
+  productMeta: { fontSize: 12, color: '#888' },
+  productRevenue: { fontSize: 15, fontWeight: 'bold' },
 });

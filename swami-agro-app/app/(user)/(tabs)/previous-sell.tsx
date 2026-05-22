@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, FlatList, ActivityIndicator, TouchableOpacity, Alert, ScrollView } from 'react-native';
 import { Title, Text, Surface, IconButton, Searchbar, Divider, Card, Badge, Modal, Portal, Button, SegmentedButtons } from 'react-native-paper';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, doc, updateDoc, runTransaction, deleteDoc, increment } from 'firebase/firestore';
 import { db } from '../../../src/config/firebase';
 import { useBusiness } from '../../../src/context/BusinessContext';
 import { useAppTheme } from '../../../src/context/ThemeContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
+import { useAuth } from '../../../src/context/AuthContext';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import AppLoader from '../../../src/components/AppLoader';
 
 const FilterChip = ({ label, active, onPress, theme }: any) => (
   <TouchableOpacity 
@@ -36,6 +38,7 @@ export default function PreviousSellScreen() {
   const { activeBusiness } = useBusiness();
   const { theme, isDarkMode } = useAppTheme();
   const { t } = useLanguage();
+  const { userRole } = useAuth();
   const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -127,6 +130,57 @@ export default function PreviousSellScreen() {
     }
   };
 
+  const handleDeleteSale = async (sale: any) => {
+    Alert.alert(
+      t('deleteConfirmTitle') || 'Delete Transaction',
+      t('deleteConfirmMsg') || 'Are you sure you want to delete this sale? This will also adjust the total sales amount.',
+      [
+        { text: t('cancel'), style: 'cancel' },
+        { 
+          text: t('delete'), 
+          style: 'destructive',
+          onPress: async () => {
+            setUpdating(true);
+            try {
+              if (!activeBusiness?.id) return;
+              
+              const businessRef = doc(db, 'businesses', activeBusiness.id);
+              const transactionRef = doc(db, 'transactions', sale.id);
+
+              await runTransaction(db, async (transaction) => {
+                // Restore stock for each item in the sale
+                if (sale.items && Array.isArray(sale.items)) {
+                  for (const item of sale.items) {
+                    const itemRef = doc(db, `businesses/${activeBusiness.id}/items`, item.id);
+                    // We don't necessarily need to check if item exists, but it's safer
+                    transaction.update(itemRef, {
+                      stockQuantity: increment(item.qty || 0)
+                    });
+                  }
+                }
+
+                // Decrement total sales in business doc
+                transaction.update(businessRef, {
+                  totalSales: increment(-sale.total)
+                });
+                // Delete the transaction doc
+                transaction.delete(transactionRef);
+              });
+
+              setDetailVisible(false);
+              Alert.alert(t('success'), t('saleDeleted') || "Sale deleted and totals adjusted.");
+            } catch (error) {
+              console.error(error);
+              Alert.alert(t('error'), "Failed to delete transaction");
+            } finally {
+              setUpdating(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const getBase64Image = async (url: string) => {
     if (!url) return '';
     try {
@@ -164,6 +218,7 @@ export default function PreviousSellScreen() {
     const totalGST = sale.totalGST || (sale.total - subtotal);
     const cdPercentage = sale.cdPercentage ?? 2;
     const cdAmount = sale.cdAmount ?? 0;
+    const bank = sale.bankDetails;
 
     // Use absolute URLs and ensure images are loaded
     const logoUrl = await getBase64Image(businessInfo?.photoUrl || '');
@@ -193,58 +248,6 @@ export default function PreviousSellScreen() {
             .box-title { font-size: 11px; font-weight: bold; color: #1b5e20; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid #e8f5e9; padding-bottom: 8px; margin-bottom: 12px; }
             .customer-name { font-size: 18px; font-weight: 700; margin-bottom: 5px; color: #222; }
             .transport-detail { font-size: 12px; color: #555; margin: 4px 0; display: flex; justify-content: space-between; }
-
-            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
-            th { background: #1b5e20; color: white; padding: 12px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: center; }
-            th:first-child { border-radius: 8px 0 0 0; text-align: left; }
-            th:last-child { border-radius: 0 8px 0 0; text-align: right; }
-            
-            .totals-container { display: flex; justify-content: flex-end; }
-            .totals-table { width: 300px; }
-            .total-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
-            .total-row.grand-total { border-top: 2px solid #1b5e20; border-bottom: none; margin-top: 10px; padding-top: 15px; }
-            .grand-total-label { font-size: 20px; font-weight: 800; color: #1b5e20; }
-            .grand-total-value { font-size: 22px; font-weight: 800; color: #1b5e20; }
-
-            .footer { margin-top: 80px; display: flex; justify-content: space-between; align-items: flex-end; }
-            .bank-info { font-size: 12px; color: #555; background: #f9f9f9; padding: 15px; border-radius: 10px; width: 300px; }
-            .signature-box { text-align: center; width: 220px; }
-            .signature-img { width: 120px; height: 50px; object-fit: contain; margin-bottom: 5px; display: ${signatureUrl ? 'inline-block' : 'none'}; }
-            .signature-line { border-top: 1px solid #333; padding-top: 8px; font-weight: bold; font-size: 12px; color: #1b5e20; }
-            
-            .thanks { text-align: center; color: #aaa; font-size: 11px; margin-top: 50px; font-style: italic; }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1 class="invoice-title">INVOICE</h1>
-            <div class="header">
-              <div class="business-info">
-                ${logoUrl ? `<img src="${logoUrl}" class="logo" />` : ''}
-                <h2 class="business-name">${businessInfo?.businessName}</h2>
-                <p class="business-detail"><b>GSTIN:</b> ${businessInfo?.gstId || 'N/A'}</p>
-                <p class="business-detail"><b>Contact:</b> ${businessInfo?.phoneNumber || businessInfo?.phone || ''}</p>
-                <p class="business-detail" style="margin-top: 8px; color: #444; font-weight: 500;">${businessInfo?.address || ''}</p>
-              </div>
-              <div class="invoice-meta">
-                <div class="meta-item"><span class="meta-label">Invoice No:</span> ${invNo}</div>
-                <div class="meta-item"><span class="meta-label">Date:</span> ${date}</div>
-              </div>
-            </div>
-
-            <div class="bill-grid">
-              <div class="bill-box">
-                <div class="box-title">Bill To</div>
-                <div class="customer-name">${sale.customerName || 'Walk-in Customer'}</div>
-                <p class="business-detail"><b>Phone:</b> ${sale.customerPhone || 'N/A'}</p>
-              </div>
-              <div class="bill-box">
-                <div class="box-title">Transport Details</div>
-                <div class="transport-detail"><span>Destination:</span> <b>${sale.destination || 'N/A'}</b></div>
-                <div class="transport-detail"><span>Vehicle No:</span> <b>${sale.vehicleNumber || 'N/A'}</b></div>
-                <div class="transport-detail"><span>Dispatch:</span> <b>${sale.dispatchLocation || 'N/A'}</b></div>
-              </div>
-            </div>
 
             <table>
               <thead>
@@ -318,11 +321,7 @@ export default function PreviousSellScreen() {
   };
 
   if (loading) {
-    return (
-      <View style={[styles.centered, { backgroundColor: theme.colors.background }]}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
+    return <AppLoader message={t('loading') || 'Loading...'} />;
   }
 
   return (
@@ -358,7 +357,7 @@ export default function PreviousSellScreen() {
             { value: 'pending', label: 'Pending', icon: 'clock-alert', checkedColor: 'white', uncheckedColor: theme.colors.onSurfaceVariant },
           ]}
           style={styles.paySegmented}
-          density="compact"
+          density="small"
         />
       </Surface>
 
@@ -516,9 +515,23 @@ export default function PreviousSellScreen() {
                 <Button mode="contained" onPress={() => generatePDF(selectedSale)} style={styles.pdfBtn} icon="file-pdf-box" buttonColor={theme.colors.error}>
                   {t('generatePdf')}
                 </Button>
+                
                 <Button mode="outlined" onPress={() => setDetailVisible(false)} style={styles.closeBtn} textColor={theme.colors.primary}>
                   {t('close')}
                 </Button>
+
+                {userRole === 'admin' && (
+                  <Button 
+                    mode="outlined" 
+                    onPress={() => handleDeleteSale(selectedSale)} 
+                    style={[styles.deleteBtn, { borderColor: theme.colors.error, marginTop: 12 }]} 
+                    icon="delete-outline" 
+                    textColor={theme.colors.error}
+                    loading={updating}
+                  >
+                    {t('deleteSale') || 'Delete Transaction'}
+                  </Button>
+                )}
               </View>
             </ScrollView>
           )}
@@ -601,5 +614,6 @@ const styles = StyleSheet.create({
   totalValue: { fontSize: 22, fontWeight: 'bold' },
   modalActions: { marginTop: 25 },
   pdfBtn: { marginBottom: 12, borderRadius: 15, paddingVertical: 4 },
+  deleteBtn: { marginBottom: 12, borderRadius: 15, paddingVertical: 4 },
   closeBtn: { borderRadius: 15, paddingVertical: 4 }
 });

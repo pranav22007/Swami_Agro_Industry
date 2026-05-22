@@ -1,33 +1,93 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, View, ScrollView, Image, TouchableOpacity, Dimensions } from 'react-native';
-import { Title, Text, Surface, Card, Button, IconButton, ActivityIndicator, Modal, Portal, List, Divider } from 'react-native-paper';
-import { auth } from '../../../src/config/firebase';
+import { StyleSheet, View, ScrollView, Image, TouchableOpacity, Dimensions, Alert } from 'react-native';
+import { Title, Text, Surface, Card, Button, IconButton, Modal, Portal, Divider, Badge } from 'react-native-paper';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { db } from '../../../src/config/firebase';
 import { useRouter } from 'expo-router';
 import { useBusiness } from '../../../src/context/BusinessContext';
 import { useAppTheme } from '../../../src/context/ThemeContext';
 import { useLanguage } from '../../../src/context/LanguageContext';
+import AppLoader from '../../../src/components/AppLoader';
+import * as Updates from 'expo-updates';
 
 const { width } = Dimensions.get('window');
 
 export default function UserDashboard() {
-  const { businesses, activeBusiness, setActiveBusiness, loading } = useBusiness();
+  const { businesses, activeBusiness, setActiveBusiness, loading: businessLoading } = useBusiness();
   const [switcherVisible, setSwitcherVisible] = useState(false);
+  const [totalExpenses, setTotalExpenses] = useState(0);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const router = useRouter();
   const { theme } = useAppTheme();
   const { t } = useLanguage();
 
   useEffect(() => {
-    if (!loading && businesses.length === 0) {
+    if (!businessLoading && businesses.length === 0) {
       router.replace('/(user)/business-setup');
     }
-  }, [loading, businesses]);
+  }, [businessLoading, businesses]);
 
-  if (loading) {
-    return (
-      <View style={[styles.centered, { backgroundColor: theme.colors.background }]}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
+  useEffect(() => {
+    checkAppUpdate();
+  }, []);
+
+  const checkAppUpdate = async () => {
+    if (__DEV__) return;
+    try {
+      const update = await Updates.checkForUpdateAsync();
+      if (update.isAvailable) {
+        setUpdateAvailable(true);
+      }
+    } catch (e) {
+      console.log('Update check skipped or failed');
+    }
+  };
+
+  const handleNotificationPress = async () => {
+    if (updateAvailable) {
+      Alert.alert(
+        'Update Available',
+        'A new version of Swami Agro is available. Would you like to update now?',
+        [
+          { text: 'Later', style: 'cancel' },
+          { 
+            text: 'Update Now', 
+            onPress: async () => {
+              try {
+                await Updates.fetchUpdateAsync();
+                await Updates.reloadAsync();
+              } catch (e) {
+                Alert.alert('Update Failed', 'Please check your internet connection and try again.');
+              }
+            } 
+          }
+        ]
+      );
+    } else {
+      Alert.alert('Notifications', 'You are all caught up! No new updates or alerts.');
+    }
+  };
+
+  useEffect(() => {
+    if (!activeBusiness?.id) return;
+
+    // Fetch total expenses
+    const expRef = query(collection(db, 'expenses'), where('businessId', '==', activeBusiness.id));
+    const unsubscribeExpenses = onSnapshot(expRef, (snapshot) => {
+      let total = 0;
+      snapshot.forEach(doc => {
+        total += doc.data().amount || 0;
+      });
+      setTotalExpenses(total);
+    });
+
+    return () => {
+      unsubscribeExpenses();
+    };
+  }, [activeBusiness?.id]);
+
+  if (businessLoading) {
+    return <AppLoader message={t('loading') || 'Loading...'} />;
   }
 
   const business = activeBusiness;
@@ -54,28 +114,56 @@ export default function UserDashboard() {
             <Text style={[styles.headerSubtitle, { color: theme.colors.onSurfaceVariant }]}>Agro Industry Dashboard</Text>
           </View>
         </TouchableOpacity>
-        <IconButton icon="bell-outline" iconColor={theme.colors.onSurfaceVariant} onPress={() => {}} style={styles.bellIcon} />
+        <View>
+          <IconButton 
+            icon="bell-outline" 
+            iconColor={theme.colors.onSurfaceVariant} 
+            onPress={handleNotificationPress} 
+            style={styles.bellIcon} 
+          />
+          {updateAvailable && (
+            <Badge 
+              size={10} 
+              style={[styles.notificationBadge, { backgroundColor: theme.colors.error }]} 
+            />
+          )}
+        </View>
       </Surface>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* Dynamic Revenue Card */}
-        <TouchableOpacity activeOpacity={0.9} onPress={() => router.push('/(user)/analytics')}>
-          <Surface style={[styles.salesCard, { backgroundColor: theme.colors.primary }]} elevation={4}>
-            <View style={styles.salesCardContent}>
-              <View>
-                <Text style={styles.salesLabel}>{t('totalSales') || 'Total Revenue'}</Text>
-                <Text style={styles.salesAmount}>₹{business?.totalSales?.toLocaleString('en-IN') || '0'}</Text>
-              </View>
-              <Surface style={[styles.salesIconContainer, { backgroundColor: 'rgba(255,255,255,0.2)' }]} elevation={0}>
-                <IconButton icon="trending-up" iconColor="white" size={28} />
-              </Surface>
+        {/* Dynamic Revenue & Profit Section */}
+        <View style={styles.financialContainer}>
+          <TouchableOpacity 
+            style={[styles.revenueBox, { backgroundColor: theme.colors.primary }]} 
+            activeOpacity={0.9} 
+            onPress={() => router.push('/(user)/analytics')}
+          >
+            <Text style={styles.financialLabel}>Total Sales</Text>
+            <Text style={styles.financialAmount}>₹{business?.totalSales?.toLocaleString('en-IN') || '0'}</Text>
+            <View style={styles.financialFooter}>
+              <IconButton icon="trending-up" iconColor="white" size={16} style={{ margin: 0 }} />
+              <Text style={styles.financialFooterText}>Revenue</Text>
             </View>
-            <View style={styles.salesFooter}>
-              <IconButton icon="information-outline" size={14} iconColor="rgba(255,255,255,0.6)" style={{ margin: 0 }} />
-              <Text style={styles.salesFooterText}>Tap to view detailed analytics</Text>
-            </View>
-          </Surface>
-        </TouchableOpacity>
+          </TouchableOpacity>
+          
+          <View style={styles.financialRightCol}>
+            <TouchableOpacity 
+              style={[styles.smallFinanceBox, { backgroundColor: theme.colors.error }]} 
+              activeOpacity={0.9}
+              onPress={() => router.push('/(user)/(tabs)/expenses')}
+            >
+              <Text style={styles.smallFinanceLabel}>Expenses</Text>
+              <Text style={styles.smallFinanceAmount}>₹{totalExpenses.toLocaleString('en-IN')}</Text>
+            </TouchableOpacity>
+            
+            <Surface style={[styles.smallFinanceBox, { backgroundColor: '#E8F5E9' }]} elevation={1}>
+              <Text style={[styles.smallFinanceLabel, { color: '#2E7D32' }]}>Net Profit</Text>
+              <Text style={[styles.smallFinanceAmount, { color: '#2E7D32' }]}>
+                ₹{((business?.totalSales || 0) - totalExpenses).toLocaleString('en-IN')}
+              </Text>
+            </Surface>
+          </View>
+        </View>
 
         {/* Quick Actions Grid */}
         <View style={styles.sectionHeader}>
@@ -262,43 +350,71 @@ const styles = StyleSheet.create({
   chevronIcon: { margin: 0, marginLeft: -5 },
   headerSubtitle: { fontSize: 12, marginTop: -8 },
   bellIcon: { backgroundColor: '#f5f5f5' },
+  notificationBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    borderWidth: 1.5,
+    borderColor: 'white',
+  },
   content: { padding: 20 },
-  salesCard: {
-    borderRadius: 24,
-    padding: 22,
+  financialContainer: {
+    flexDirection: 'row',
+    height: 160,
     marginBottom: 25,
   },
-  salesCardContent: {
-    flexDirection: 'row',
+  revenueBox: {
+    flex: 1.2,
+    borderRadius: 24,
+    padding: 18,
+    marginRight: 12,
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    elevation: 4,
   },
-  salesLabel: {
+  financialLabel: {
     color: 'rgba(255,255,255,0.7)',
-    fontSize: 13,
+    fontSize: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     fontWeight: '600',
   },
-  salesAmount: {
+  financialAmount: {
     color: 'white',
-    fontSize: 32,
+    fontSize: 26,
     fontWeight: 'bold',
-    marginTop: 2,
   },
-  salesIconContainer: { borderRadius: 12 },
-  salesFooter: {
-    marginTop: 15,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.15)',
+  financialFooter: {
     flexDirection: 'row',
     alignItems: 'center',
+    opacity: 0.8,
   },
-  salesFooterText: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
-    fontWeight: '500',
+  financialFooterText: {
+    color: 'white',
+    fontSize: 10,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+  },
+  financialRightCol: {
+    flex: 1,
+    justifyContent: 'space-between',
+  },
+  smallFinanceBox: {
+    flex: 0.47,
+    borderRadius: 20,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  smallFinanceLabel: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 10,
+    textTransform: 'uppercase',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  smallFinanceAmount: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
   sectionHeader: { marginBottom: 15, paddingHorizontal: 5 },
   sectionTitle: { fontSize: 18, fontWeight: 'bold' },

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, KeyboardAvoidingView, Platform, ScrollView, Dimensions, TouchableOpacity, Alert } from 'react-native';
-import { TextInput, Button, Title, Text, Surface, HelperText, IconButton, ActivityIndicator, Checkbox, Divider, SegmentedButtons } from 'react-native-paper';
+import { TextInput, Button, Title, Text, Surface, HelperText, IconButton, Checkbox, Divider, SegmentedButtons } from 'react-native-paper';
 import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../src/config/firebase';
 import { useRouter } from 'expo-router';
@@ -9,6 +9,7 @@ import { useAuth } from '../src/context/AuthContext';
 import { useAppTheme } from '../src/context/ThemeContext';
 import { useLanguage } from '../src/context/LanguageContext';
 import { StatusBar } from 'expo-status-bar';
+import AppLoader from '../src/components/AppLoader';
 
 const { width, height } = Dimensions.get('window');
 
@@ -99,12 +100,7 @@ export default function LoginScreen() {
   };
 
   if (authLoading) {
-    return (
-      <View style={[styles.loadingContainer, { backgroundColor: theme.colors.background }]}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-        <Text style={{ marginTop: 10, color: theme.colors.primary }}>{t('loading')}...</Text>
-      </View>
-    );
+    return <AppLoader message={t('loading') || 'Loading...'} />;
   }
 
   return (
@@ -137,7 +133,7 @@ export default function LoginScreen() {
                 { value: 'mr', label: 'मराठी' },
               ]}
               style={styles.segmentedButtons}
-              density="compact"
+              density="small"
             />
           </View>
 
