@@ -9,6 +9,7 @@ import * as Updates from 'expo-updates';
 import { Alert, View } from 'react-native';
 import OfflineNotice from '../src/components/OfflineNotice';
 import AppLoader from '../src/components/AppLoader';
+import DevBanner from '../src/components/DevBanner';
 
 function RootApp() {
   const { theme } = useAppTheme();
@@ -25,6 +26,7 @@ function RootApp() {
   return (
     <PaperProvider theme={theme}>
       <View style={{ flex: 1 }}>
+        <DevBanner />
         <OfflineNotice />
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" options={{ title: 'Login' }} />

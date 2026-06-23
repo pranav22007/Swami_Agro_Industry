@@ -49,11 +49,7 @@ export default function LoginScreen() {
       if (userRole === 'admin') {
         router.replace('/(admin)');
       } else {
-        if (businesses && businesses.length > 0) {
-          router.replace('/(user)');
-        } else {
-          router.replace('/(user)/business-setup');
-        }
+        router.replace('/(user)');
       }
     }
   }, [user, userRole, authLoading, businessLoading, businesses]);

@@ -22,12 +22,6 @@ export default function UserDashboard() {
   const { t } = useLanguage();
 
   useEffect(() => {
-    if (!businessLoading && businesses.length === 0) {
-      router.replace('/(user)/business-setup');
-    }
-  }, [businessLoading, businesses]);
-
-  useEffect(() => {
     checkAppUpdate();
   }, []);
 
@@ -88,6 +82,20 @@ export default function UserDashboard() {
 
   if (businessLoading) {
     return <AppLoader message={t('loading') || 'Loading...'} />;
+  }
+
+  if (!businessLoading && businesses.length === 0) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background, justifyContent: 'center', alignItems: 'center', padding: 24 }]}> 
+        <Title style={{ color: theme.colors.primary, marginBottom: 12 }}>No business found</Title>
+        <Text style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginBottom: 24 }}>
+          It looks like you do not have an active business linked yet. Add a new business to continue.
+        </Text>
+        <Button mode="contained" onPress={() => router.push('/(user)/business-setup')}>
+          Add New Business
+        </Button>
+      </View>
+    );
   }
 
   const business = activeBusiness;
