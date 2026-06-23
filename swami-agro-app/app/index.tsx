@@ -6,6 +6,7 @@ import { auth } from '../src/config/firebase';
 import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../src/context/AuthContext';
+import { useBusiness } from '../src/context/BusinessContext';
 import { useAppTheme } from '../src/context/ThemeContext';
 import { useLanguage } from '../src/context/LanguageContext';
 import { StatusBar } from 'expo-status-bar';
@@ -22,6 +23,7 @@ export default function LoginScreen() {
   const [error, setError] = useState('');
   
   const { user, userRole, loading: authLoading } = useAuth();
+  const { businesses, loading: businessLoading } = useBusiness();
   const { theme } = useAppTheme();
   const { t, language, setLanguage } = useLanguage();
   const router = useRouter();
@@ -42,20 +44,25 @@ export default function LoginScreen() {
     }
   };
 
-  // Handle automatic persistent login
   useEffect(() => {
-    if (!authLoading && user && userRole) {
+    if (!authLoading && !businessLoading && user && userRole) {
       if (userRole === 'admin') {
         router.replace('/(admin)');
       } else {
-        router.replace('/(user)');
+        if (businesses && businesses.length > 0) {
+          router.replace('/(user)');
+        } else {
+          router.replace('/(user)/business-setup');
+        }
       }
     }
-  }, [user, userRole, authLoading]);
+  }, [user, userRole, authLoading, businessLoading, businesses]);
 
   const handleLogin = async () => {
+    console.log('Login initiated for:', email);
     if (!email || !password) {
       setError('Please enter both email and password');
+      console.log('Login failed: Missing email or password');
       return;
     }
     
@@ -63,7 +70,9 @@ export default function LoginScreen() {
     setError('');
     
     try {
+      console.log('Attempting Firebase signIn...');
       await signInWithEmailAndPassword(auth, email.trim(), password);
+      console.log('Firebase signIn successful');
       
       // Save or remove email from storage
       if (rememberMe) {
@@ -71,8 +80,9 @@ export default function LoginScreen() {
       } else {
         await AsyncStorage.removeItem('saved_email');
       }
+      console.log('AsyncStorage updated');
     } catch (err: any) {
-      console.error(err);
+      console.error('Login error caught:', err);
       let errorMessage = 'Failed to sign in. Please check your credentials.';
       if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
         errorMessage = 'Invalid email or password.';
@@ -82,6 +92,7 @@ export default function LoginScreen() {
       setError(errorMessage);
     } finally {
       setLoading(false);
+      console.log('Login attempt finished.');
     }
   };
 

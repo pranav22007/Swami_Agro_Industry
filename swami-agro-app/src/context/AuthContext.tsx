@@ -25,11 +25,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(firebaseUser);
       if (firebaseUser) {
         // Fetch user role from Firestore
-        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          setUserRole(userDoc.data().role);
-        } else {
-          setUserRole('user'); // Default
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setUserRole(userDoc.data().role);
+          } else {
+            setUserRole('user'); // Default
+          }
+        } catch (error) {
+          console.error('Error fetching user role:', error);
+          setUserRole('user'); // Fallback to default on error
         }
       } else {
         setUserRole(null);

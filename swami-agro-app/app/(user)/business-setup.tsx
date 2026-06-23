@@ -3,7 +3,8 @@ import { StyleSheet, View, ScrollView, Image, TouchableOpacity, Alert, ActivityI
 import { TextInput, Button, Title, Text, Surface, Divider, IconButton, Card } from 'react-native-paper';
 import * as ImagePicker from 'expo-image-picker';
 import { collection, addDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { db, auth } from '../../src/config/firebase';
+import { db, auth, storage } from '../../src/config/firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAppTheme } from '../../src/context/ThemeContext';
 import { useLanguage } from '../../src/context/LanguageContext';
@@ -28,6 +29,8 @@ export default function BusinessSetup() {
   
   const [logo, setLogo] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
+  const [logoChanged, setLogoChanged] = useState(false);
+  const [signatureChanged, setSignatureChanged] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fetching, setFetching] = useState(false);
 
@@ -71,9 +74,23 @@ export default function BusinessSetup() {
     });
 
     if (!result.canceled) {
-      if (type === 'logo') setLogo(result.assets[0].uri);
-      else setSignature(result.assets[0].uri);
+      if (type === 'logo') {
+        setLogo(result.assets[0].uri);
+        setLogoChanged(true);
+      }
+      else {
+        setSignature(result.assets[0].uri);
+        setSignatureChanged(true);
+      }
     }
+  };
+
+  const uploadImage = async (uri: string, path: string) => {
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    const storageRef = ref(storage, path);
+    await uploadBytes(storageRef, blob);
+    return await getDownloadURL(storageRef);
   };
 
   const handleSave = async () => {
@@ -87,11 +104,21 @@ export default function BusinessSetup() {
       const user = auth.currentUser;
       if (!user) return;
 
+      let photoUrl = logo;
+      let signatureUrl = signature;
+
+      if (logoChanged && logo && !logo.startsWith('http')) {
+        photoUrl = await uploadImage(logo, `businesses/${user.uid}/${Date.now()}_logo`);
+      }
+      if (signatureChanged && signature && !signature.startsWith('http')) {
+        signatureUrl = await uploadImage(signature, `businesses/${user.uid}/${Date.now()}_sig`);
+      }
+
       const businessData = {
         ...form,
         userId: user.uid,
-        photoUrl: logo,
-        signatureUrl: signature,
+        photoUrl: photoUrl,
+        signatureUrl: signatureUrl,
         updatedAt: new Date().toISOString(),
       };
 
