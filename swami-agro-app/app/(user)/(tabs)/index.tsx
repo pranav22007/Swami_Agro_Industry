@@ -13,8 +13,9 @@ import * as Updates from 'expo-updates';
 const { width } = Dimensions.get('window');
 
 export default function UserDashboard() {
-  const { businesses, activeBusiness, setActiveBusiness, loading: businessLoading } = useBusiness();
+  const { businesses, activeBusiness, setActiveBusiness, loading: businessLoading, error: businessError } = useBusiness();
   const [switcherVisible, setSwitcherVisible] = useState(false);
+  const [totalSales, setTotalSales] = useState(0); // Added dynamic total sales state
   const [totalExpenses, setTotalExpenses] = useState(0);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const router = useRouter();
@@ -65,7 +66,19 @@ export default function UserDashboard() {
   useEffect(() => {
     if (!activeBusiness?.id) return;
 
-    // Fetch total expenses
+    // 1. Fetch dynamic total sales from transactions collection in real-time
+    const transRef = query(collection(db, 'transactions'), where('businessId', '==', activeBusiness.id));
+    const unsubscribeTransactions = onSnapshot(transRef, (snapshot) => {
+      let salesSum = 0;
+      snapshot.forEach(doc => {
+        salesSum += doc.data().total || 0;
+      });
+      setTotalSales(salesSum);
+    }, (error) => {
+      console.error("Dashboard transactions snapshot error:", error);
+    });
+
+    // 2. Fetch total expenses
     const expRef = query(collection(db, 'expenses'), where('businessId', '==', activeBusiness.id));
     const unsubscribeExpenses = onSnapshot(expRef, (snapshot) => {
       let total = 0;
@@ -73,9 +86,12 @@ export default function UserDashboard() {
         total += doc.data().amount || 0;
       });
       setTotalExpenses(total);
+    }, (error) => {
+      console.error("Dashboard expenses snapshot error:", error);
     });
 
     return () => {
+      unsubscribeTransactions();
       unsubscribeExpenses();
     };
   }, [activeBusiness?.id]);
@@ -84,16 +100,25 @@ export default function UserDashboard() {
     return <AppLoader message={t('loading') || 'Loading...'} />;
   }
 
-  if (!businessLoading && businesses.length === 0) {
+  if (!businessLoading && (businessError || businesses.length === 0)) {
     return (
       <View style={[styles.container, { backgroundColor: theme.colors.background, justifyContent: 'center', alignItems: 'center', padding: 24 }]}> 
-        <Title style={{ color: theme.colors.primary, marginBottom: 12 }}>No business found</Title>
+        <Title style={{ color: theme.colors.primary, marginBottom: 12 }}>
+          {businessError ? 'Unable to load business' : 'No business found'}
+        </Title>
         <Text style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginBottom: 24 }}>
-          It looks like you do not have an active business linked yet. Add a new business to continue.
+          {businessError
+            ? businessError
+            : 'It looks like you do not have an active business linked yet. Add a new business to continue.'}
         </Text>
-        <Button mode="contained" onPress={() => router.push('/(user)/business-setup')}>
+        <Button mode="contained" onPress={() => router.push('/(user)/business-setup')} style={{ marginBottom: 12 }}>
           Add New Business
         </Button>
+        {businessError ? (
+          <Button mode="outlined" onPress={() => router.push('/(user)/recovery')}>
+            Run Recovery
+          </Button>
+        ) : null}
       </View>
     );
   }
@@ -147,7 +172,8 @@ export default function UserDashboard() {
             onPress={() => router.push('/(user)/analytics')}
           >
             <Text style={styles.financialLabel}>Total Sales</Text>
-            <Text style={styles.financialAmount}>₹{business?.totalSales?.toLocaleString('en-IN') || '0'}</Text>
+            {/* Changed from business.totalSales to our real-time calculated totalSales state */}
+            <Text style={styles.financialAmount}>₹{totalSales.toLocaleString('en-IN')}</Text>
             <View style={styles.financialFooter}>
               <IconButton icon="trending-up" iconColor="white" size={16} style={{ margin: 0 }} />
               <Text style={styles.financialFooterText}>Revenue</Text>
@@ -167,7 +193,8 @@ export default function UserDashboard() {
             <Surface style={[styles.smallFinanceBox, { backgroundColor: '#E8F5E9' }]} elevation={1}>
               <Text style={[styles.smallFinanceLabel, { color: '#2E7D32' }]}>Net Profit</Text>
               <Text style={[styles.smallFinanceAmount, { color: '#2E7D32' }]}>
-                ₹{((business?.totalSales || 0) - totalExpenses).toLocaleString('en-IN')}
+                {/* Dynamically substracting from our accurate dynamic sales calculations */}
+                ₹{(totalSales - totalExpenses).toLocaleString('en-IN')}
               </Text>
             </Surface>
           </View>

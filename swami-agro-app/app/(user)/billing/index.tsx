@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, ScrollView, Alert, TouchableOpacity, Dimensions, Animated } from 'react-native';
-import { Title, Text, Surface, TextInput, Button, Divider, IconButton, Card, Avatar, Portal, Modal, List, Badge, SegmentedButtons } from 'react-native-paper';
+import { StyleSheet, View, ScrollView, Alert, TouchableOpacity, Dimensions, Animated, Image } from 'react-native';
+import { TextInput, Button, Title, Text, Surface, Divider, IconButton, Card, Avatar, Portal, Modal, List, Badge, SegmentedButtons } from 'react-native-paper';
 import { collection, query, onSnapshot, addDoc, doc, updateDoc, increment, serverTimestamp, where, getDocs, limit, runTransaction } from 'firebase/firestore';
 import { db, auth } from '../../../src/config/firebase';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { WebView } from 'react-native-webview';
 import { useRouter } from 'expo-router';
 import { useBusiness } from '../../../src/context/BusinessContext';
 import { useAppTheme } from '../../../src/context/ThemeContext';
@@ -30,6 +31,9 @@ export default function NewBillingScreen() {
   const [showCustList, setShowCustList] = useState(false);
   const [bankModalVisible, setBankModalVisible] = useState(false);
   const [itemSearchQuery, setItemSearchQuery] = useState('');
+  const [billPreviewVisible, setBillPreviewVisible] = useState(false);
+  const [billPreviewHtml, setBillPreviewHtml] = useState('');
+  const [pendingBillData, setPendingBillData] = useState<any>(null);
 
   const router = useRouter();
 
@@ -100,23 +104,6 @@ export default function NewBillingScreen() {
     setShowCustList(false);
   };
 
-  const getBase64Image = async (url: string) => {
-    if (!url) return '';
-    try {
-      // First try fetching directly
-      const response = await fetch(url);
-      const blob = await response.blob();
-      return new Promise<string>((resolve) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result as string);
-        reader.readAsDataURL(blob);
-      });
-    } catch (e) {
-      console.warn("Could not fetch image to base64", e);
-      return url; // fallback to URL if base64 conversion fails
-    }
-  };
-
   const generatePDF = async (saleData: any) => {
     const businessInfo = activeBusiness;
     const date = new Date().toLocaleDateString('en-IN', {
@@ -126,7 +113,7 @@ export default function NewBillingScreen() {
     const invNo = saleData.invoiceNumber || 'DRAFT';
     const bank = saleData.bankDetails || selectedBank;
 
-    const itemsHtml = selectedItems.map((item: any, index: number) => `
+    const itemsHtml = saleData.items.map((item: any, index: number) => `
       <tr style="border-bottom: 1px solid #f0f0f0;">
         <td style="padding: 15px 10px; text-align: left; font-size: 12px; color: #444;">${index + 1}</td>
         <td style="padding: 15px 10px; text-align: left; font-size: 13px; font-weight: 500;">${item.name}</td>
@@ -137,35 +124,29 @@ export default function NewBillingScreen() {
       </tr>
     `).join('');
 
-    const { subtotal, totalGST, cdPercentage, cdAmount, total } = calculateTotals();
-
-    // Fetch images as base64 so they render reliably in the PDF WebView
-    const logoUrl = await getBase64Image(businessInfo?.photoUrl || '');
-    const signatureUrl = await getBase64Image(businessInfo?.signatureUrl || '');
+    const { subtotal, totalGST, cdPercentage, cdAmount, total } = saleData;
 
     const html = `
       <html>
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
           <style>
-            @page { margin: 0; }
+            @page { margin: 20px; }
             body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #333; background-color: #fff; }
-            .container { padding: 40px; }
-            .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 4px solid #1b5e20; padding-bottom: 20px; }
+            .container { padding: 20px; }
+            .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 30px; border-bottom: 4px solid #1b5e20; padding-bottom: 20px; }
             .business-info { flex: 2; }
-            .logo { width: 80px; height: 80px; object-fit: contain; margin-bottom: 15px; border-radius: 12px; background: #f9f9f9; padding: 5px; display: ${logoUrl ? 'block' : 'none'}; }
-            .business-name { font-size: 28px; font-weight: 800; color: #1b5e20; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
+            .business-name { font-size: 26px; font-weight: 800; color: #1b5e20; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
             .business-detail { font-size: 12px; color: #666; margin: 3px 0; line-height: 1.4; }
-            .invoice-label { flex: 1; text-align: right; }
-            .invoice-title { font-size: 42px; font-weight: 900; color: #e8f5e9; margin: 0; position: absolute; right: 40px; top: 30px; z-index: -1; }
-            .invoice-meta { margin-top: 50px; }
+            .invoice-title { font-size: 36px; font-weight: 900; color: #e8f5e9; margin: 0; position: absolute; right: 40px; top: 30px; z-index: -1; }
+            .invoice-meta { margin-top: 40px; text-align: right; }
             .meta-item { font-size: 14px; margin-bottom: 5px; }
             .meta-label { font-weight: bold; color: #1b5e20; }
 
-            .bill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; margin-bottom: 40px; }
-            .bill-box { background: #fcfcfc; padding: 20px; border-radius: 12px; border: 1px solid #f0f0f0; }
+            .bill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
+            .bill-box { background: #fcfcfc; padding: 15px; border-radius: 12px; border: 1px solid #f0f0f0; }
             .box-title { font-size: 11px; font-weight: bold; color: #1b5e20; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid #e8f5e9; padding-bottom: 8px; margin-bottom: 12px; }
-            .customer-name { font-size: 18px; font-weight: 700; margin-bottom: 5px; color: #222; }
+            .customer-name { font-size: 16px; font-weight: 700; margin-bottom: 5px; color: #222; }
             .transport-detail { font-size: 12px; color: #555; margin: 4px 0; display: flex; justify-content: space-between; }
 
             table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
@@ -173,32 +154,28 @@ export default function NewBillingScreen() {
             th:first-child { border-radius: 8px 0 0 0; text-align: left; }
             th:last-child { border-radius: 0 8px 0 0; text-align: right; }
             
-            .totals-container { display: flex; justify-content: flex-end; }
-            .totals-table { width: 300px; }
+            .totals-table { width: 100%; max-width: 300px; margin-left: auto; }
             .total-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
             .total-row.grand-total { border-top: 2px solid #1b5e20; border-bottom: none; margin-top: 10px; padding-top: 15px; }
-            .grand-total-label { font-size: 20px; font-weight: 800; color: #1b5e20; }
-            .grand-total-value { font-size: 22px; font-weight: 800; color: #1b5e20; }
+            .grand-total-label { font-size: 18px; font-weight: 800; color: #1b5e20; }
+            .grand-total-value { font-size: 20px; font-weight: 800; color: #1b5e20; }
 
-            .footer { margin-top: 80px; display: flex; justify-content: space-between; align-items: flex-end; }
-            .bank-info { font-size: 12px; color: #555; background: #f9f9f9; padding: 15px; border-radius: 10px; width: 300px; }
-            .signature-box { text-align: center; width: 220px; }
-            .signature-img { width: 120px; height: 50px; object-fit: contain; margin-bottom: 5px; display: ${signatureUrl ? 'inline-block' : 'none'}; }
-            .signature-line { border-top: 1px solid #333; padding-top: 8px; font-weight: bold; font-size: 12px; color: #1b5e20; }
+            .footer { margin-top: 40px; display: flex; justify-content: space-between; align-items: flex-start; }
+            .bank-info { font-size: 12px; color: #555; background: #f9f9f9; padding: 15px; border-radius: 10px; width: 45%; }
+            .totals-wrapper { width: 50%; }
             
-            .thanks { text-align: center; color: #aaa; font-size: 11px; margin-top: 50px; font-style: italic; }
+            .signature-area { margin-top: 40px; text-align: right; font-weight: bold; font-size: 12px; color: #1b5e20; }
+            .thanks { text-align: center; color: #aaa; font-size: 11px; margin-top: 40px; font-style: italic; }
           </style>
         </head>
         <body>
           <div class="container">
-            <h1 class="invoice-title">INVOICE</h1>
             <div class="header">
               <div class="business-info">
-                ${logoUrl ? `<img src="${logoUrl}" class="logo" />` : ''}
                 <h2 class="business-name">${businessInfo?.businessName}</h2>
                 <p class="business-detail"><b>GSTIN:</b> ${businessInfo?.gstId || 'N/A'}</p>
                 <p class="business-detail"><b>Contact:</b> ${businessInfo?.phoneNumber || businessInfo?.phone || ''}</p>
-                <p class="business-detail" style="margin-top: 8px; color: #444; font-weight: 500;">${businessInfo?.address || ''}</p>
+                <p class="business-detail" style="margin-top: 6px; color: #444; font-weight: 500;">${businessInfo?.address || ''}</p>
               </div>
               <div class="invoice-meta">
                 <div class="meta-item"><span class="meta-label">Invoice No:</span> ${invNo}</div>
@@ -247,46 +224,63 @@ export default function NewBillingScreen() {
                 ` : '<div style="color: #999;">No bank details provided</div>'}
               </div>
               
-              <div class="totals-table">
-                <div class="total-row"><span>Subtotal</span><span>₹${subtotal.toFixed(2)}</span></div>
-                <div class="total-row"><span>Tax (GST)</span><span>₹${totalGST.toFixed(2)}</span></div>
-                <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; color: #d32f2f; font-weight: 500;">
-                  <span>CD Deduction (${cdPercentage}%)</span>
-                  <span>- ₹${cdAmount.toFixed(2)}</span>
-                </div>
-                <div class="total-row grand-total">
-                  <span class="grand-total-label">Grand Total</span>
-                  <span class="grand-total-value">₹${total.toFixed(2)}</span>
+              <div class="totals-wrapper">
+                <div class="totals-table">
+                  <div class="total-row"><span>Subtotal</span><span>₹${subtotal.toFixed(2)}</span></div>
+                  <div class="total-row"><span>Tax (GST)</span><span>₹${totalGST.toFixed(2)}</span></div>
+                  <div style="display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; color: #d32f2f; font-weight: 500;">
+                    <span>CD Deduction (${cdPercentage}%)</span>
+                    <span>- ₹${cdAmount.toFixed(2)}</span>
+                  </div>
+                  <div class="total-row grand-total">
+                    <span class="grand-total-label">Grand Total</span>
+                    <span class="grand-total-value">₹${total.toFixed(2)}</span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div style="display: flex; justify-content: flex-end; margin-top: 60px;">
-              <div class="signature-box">
-                ${signatureUrl ? `<img src="${signatureUrl}" class="signature-img" />` : '<div style="height: 50px;"></div>'}
-                <div class="signature-line">${businessInfo?.ownerName || 'Authorized Signatory'}</div>
-                <div style="font-size: 10px; color: #888; margin-top: 4px;">Proprietor / Authorized Signatory</div>
-              </div>
+            <div class="signature-area">
+              <p style="margin-bottom: 40px;">For ${businessInfo?.businessName || 'Swami Agro'}</p>
+              <p style="border-top: 1px dashed #ccc; display: inline-block; padding-top: 5px; width: 200px; text-align: center;">Authorized Signatory</p>
             </div>
 
-            <p class="thanks">Thank you for choosing ${businessInfo?.businessName || 'us'}! This is a professional computer-generated invoice.</p>
+            <p class="thanks">Thank you for your business! This is a computer-generated invoice.</p>
           </div>
         </body>
       </html>
     `;
 
+    return html;
+  };
+
+  const handlePrintBill = async () => {
     try {
-      const { uri } = await Print.printToFileAsync({ html });
+      await Print.printAsync({ html: billPreviewHtml });
+    } catch (error) {
+      console.error("Print error:", error);
+      Alert.alert(t('error'), "Failed to print");
+    }
+  };
+
+  const handleShareBill = async () => {
+    try {
+      const { uri } = await Print.printToFileAsync({ html: billPreviewHtml });
       await Sharing.shareAsync(uri);
     } catch (error) {
-      console.error("PDF generation error:", error);
-      Alert.alert(t('error'), "Failed to generate PDF");
+      console.error("Share error:", error);
+      Alert.alert(t('error'), "Failed to share bill");
     }
   };
 
   const handleSaveBill = async () => {
     if (selectedItems.length === 0 || !customerName) {
       Alert.alert(t('error'), 'Add items and customer name');
+      return;
+    }
+
+    if (!selectedBank) {
+      Alert.alert(t('error'), 'Please select a bank');
       return;
     }
 
@@ -301,14 +295,12 @@ export default function NewBillingScreen() {
       const { subtotal, totalGST, cdPercentage, cdAmount, total } = calculateTotals();
       const businessRef = doc(db, 'businesses', activeBusiness.id);
       
-      // Use a transaction to safely increment the invoice number and deduct stock
       await runTransaction(db, async (transaction) => {
         const businessDoc = await transaction.get(businessRef);
         if (!businessDoc.exists()) {
           throw "Business document does not exist!";
         }
 
-        // Deduct stock for each item
         for (const item of selectedItems) {
           const itemRef = doc(db, `businesses/${activeBusiness.id}/items`, item.id);
           const itemDoc = await transaction.get(itemRef);
@@ -353,7 +345,7 @@ export default function NewBillingScreen() {
         cdAmount,
         total,
         invoiceNumber: finalInvoiceNumber,
-        paymentStatus, // 'paid' or 'pending'
+        paymentStatus,
         timestamp: serverTimestamp(),
       };
 
@@ -385,18 +377,17 @@ export default function NewBillingScreen() {
         });
       }
 
+      const html = await generatePDF(billData);
+      setPendingBillData(billData);
+      setBillPreviewHtml(html);
+
       Alert.alert(t('success'), `Bill Saved! Invoice: ${finalInvoiceNumber}`, [
-        { text: 'Print/Share', onPress: () => generatePDF(billData) },
+        { text: 'Preview & Share', onPress: () => setBillPreviewVisible(true) },
         { text: 'Done', onPress: () => router.replace('/(user)') }
       ]);
     } catch (err) {
-      console.error('Offline sync queued:', err);
-      // Even if it fails (e.g. offline), Firestore has already queued it locally.
-      // We show success to the user as the UI will be updated.
-      Alert.alert(t('success'), `Bill Saved Locally! Invoice: ${finalInvoiceNumber}`, [
-        { text: 'Print/Share', onPress: () => generatePDF(billData) },
-        { text: 'Done', onPress: () => router.replace('/(user)') }
-      ]);
+      console.error('Error saving bill:', err);
+      Alert.alert(t('error'), 'Failed to save bill');
     } finally {
       setLoading(false);
     }
@@ -632,6 +623,63 @@ export default function NewBillingScreen() {
           </ScrollView>
           <Button mode="text" onPress={() => setBankModalVisible(false)} style={{ marginTop: 10 }}>{t('close')}</Button>
         </Modal>
+
+        {/* Bill Preview Modal - Fixed Container Layer */}
+        <Modal visible={billPreviewVisible} onDismiss={() => setBillPreviewVisible(false)} contentContainerStyle={[styles.billPreviewModal, { backgroundColor: '#fff' }]}>
+          <View style={styles.billPreviewHeader}>
+            <Title style={styles.billPreviewTitle}>Invoice Preview</Title>
+            <IconButton icon="close" onPress={() => setBillPreviewVisible(false)} />
+          </View>
+          
+          <ScrollView style={{ flex: 1, padding: 16 }} showsVerticalScrollIndicator={false}>
+            {/* Native Logo View - WebView के ऊपर सुरक्षित रेंडरिंग */}
+            {activeBusiness?.photoUrl ? (
+              <Image 
+                source={{ uri: activeBusiness.photoUrl }} 
+                style={{ width: 80, height: 80, resizeMode: 'contain', marginBottom: 10, alignSelf: 'flex-start' }} 
+              />
+            ) : null}
+
+            <View style={{ height: 450, width: '100%', overflow: 'hidden' }}>
+              {billPreviewHtml ? (
+                <WebView
+                  source={{ html: billPreviewHtml }}
+                  style={{ flex: 1 }}
+                  scalesPageToFit={true}
+                  showsVerticalScrollIndicator={true}
+                  originWhitelist={['*']}
+                />
+              ) : (
+                <View style={styles.loadingContainer}>
+                  <Text>{t('loading')}</Text>
+                </View>
+              )}
+            </View>
+
+            {/* Native Signature View - WebView के नीचे सुरक्षित रेंडरिंग */}
+            {activeBusiness?.signatureUrl ? (
+              <View style={{ alignItems: 'flex-end', marginTop: 15, paddingRight: 10, marginBottom: 30 }}>
+                <Image 
+                  source={{ uri: activeBusiness.signatureUrl }} 
+                  style={{ width: 120, height: 50, resizeMode: 'contain', marginBottom: 2 }} 
+                />
+                <Text style={{ fontSize: 11, color: '#666', fontStyle: 'italic' }}>Authorized Signatory</Text>
+              </View>
+            ) : null}
+          </ScrollView>
+
+          <View style={styles.billPreviewFooter}>
+            <Button mode="outlined" onPress={() => setBillPreviewVisible(false)} style={{ flex: 1, marginRight: 8 }}>
+              Cancel
+            </Button>
+            <Button mode="contained" onPress={handlePrintBill} style={{ flex: 1, marginRight: 8 }} buttonColor={theme.colors.primary}>
+              Print
+            </Button>
+            <Button mode="contained" onPress={handleShareBill} style={{ flex: 1 }} buttonColor={theme.colors.primary}>
+              Share
+            </Button>
+          </View>
+        </Modal>
       </Portal>
     </View>
   );
@@ -680,5 +728,11 @@ const styles = StyleSheet.create({
   bankModal: { padding: 25, margin: 20, borderRadius: 30, maxHeight: '80%' },
   modalTitle: { textAlign: 'center', fontWeight: 'bold', fontSize: 20, marginBottom: 10 },
   bankOption: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 15, marginBottom: 10, borderWidth: 1, borderColor: '#f0f0f0' },
-  noBanks: { padding: 20, alignItems: 'center' }
+  noBanks: { padding: 20, alignItems: 'center' },
+  billPreviewModal: { margin: 0, padding: 0, flex: 1, borderRadius: 20 },
+  billPreviewHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  billPreviewTitle: { fontSize: 18, fontWeight: 'bold', flex: 1 },
+  webView: { flex: 1, marginVertical: 16 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  billPreviewFooter: { flexDirection: 'row', padding: 16, borderTopWidth: 1, borderTopColor: '#f0f0f0', gap: 8 }
 });
