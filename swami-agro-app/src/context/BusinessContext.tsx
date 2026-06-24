@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { collection, query, where, onSnapshot, getDocs, updateDoc, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, onSnapshot } from 'firebase/firestore';
 import { db } from '../config/firebase';
 import { useAuth } from './AuthContext';
 
@@ -16,6 +16,7 @@ interface BusinessContextType {
   activeBusiness: Business | null;
   setActiveBusiness: (business: Business) => void;
   loading: boolean;
+  error: string | null;
 }
 
 const BusinessContext = createContext<BusinessContextType>({
@@ -23,136 +24,110 @@ const BusinessContext = createContext<BusinessContextType>({
   activeBusiness: null,
   setActiveBusiness: () => {},
   loading: true,
+  error: null,
 });
 
 export const BusinessProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
+  const { user, userRole } = useAuth();
   const [businesses, setBusinesses] = useState<Business[]>([]);
   const [activeBusiness, setActiveBusiness] = useState<Business | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user) {
       setBusinesses([]);
       setActiveBusiness(null);
       setLoading(false);
+      setError(null);
       return;
     }
 
-    setLoading(true); // Reset loading state when user changes
-    console.debug('BusinessContext: signed-in user', { uid: user.uid, email: user.email });
+    setLoading(true);
+    setError(null);
+
+    const businessCollection = collection(db, 'businesses');
+    const currentUserEmail = user.email?.trim().toLowerCase() || '';
+    
+    const ownerEmail = "tanmaypatil664@gmail.com";
+    const managerEmail = "pp9073153@gmail.com";
+
+    console.debug('BusinessContext: Multi-role stream checking rules authorization:', { 
+      uid: user.uid, 
+      email: currentUserEmail,
+      role: userRole
+    });
+
+    const processBusinessDocuments = (snapshotOrDocs: any, currentList: Business[]) => {
+      const updatedList = [...currentList];
+      snapshotOrDocs.forEach((docSnap: any) => {
+        const data = docSnap.data();
+        if (!updatedList.some(b => b.id === docSnap.id)) {
+          updatedList.push({ id: docSnap.id, ...data } as Business);
+        }
+      });
+      return updatedList;
+    };
+
+    const loadSharedEmailRecords = async (currentList: Business[]) => {
+      let mergedList = [...currentList];
+      try {
+        // Query master business owner records
+        const ownerQuery = query(businessCollection, where('businessEmail', '==', ownerEmail));
+        const ownerSnap = await getDocs(ownerQuery);
+        mergedList = processBusinessDocuments(ownerSnap, mergedList);
+
+        // Query manager/admin specific documents if authorized
+        if (currentUserEmail === managerEmail || userRole === 'admin') {
+          const managerQuery = query(businessCollection, where('businessEmail', '==', managerEmail));
+          const managerSnap = await getDocs(managerQuery);
+          mergedList = processBusinessDocuments(managerSnap, mergedList);
+        }
+      } catch (err) {
+        console.error('BusinessContext: Supplementary email queries failed:', err);
+      }
+      return mergedList;
+    };
+
+    // Open listener on active UID
+    const uidQuery = query(businessCollection, where('userId', '==', user.uid));
 
     const unsubscribe = onSnapshot(
-      query(collection(db, 'businesses'), where('userId', '==', user.uid)),
+      uidQuery,
       async (snapshot) => {
-        const list: Business[] = [];
-        snapshot.forEach((doc) => {
-          list.push({ id: doc.id, ...(doc.data() as any) });
-        });
+        try {
+          let compiledList: Business[] = [];
+          compiledList = processBusinessDocuments(snapshot, compiledList);
 
-        const rawEmail = user.email;
-        const normalizedEmail = rawEmail?.trim().toLowerCase();
+          // Merge target business records safely backed by custom security token rules
+          compiledList = await loadSharedEmailRecords(compiledList);
 
-        if (list.length === 0) {
-          const alternateUidFields = ['userUID', 'ownerId'];
-          for (const field of alternateUidFields) {
-            if (list.length > 0) break;
-            try {
-              const uidQuery = query(collection(db, 'businesses'), where(field, '==', user.uid));
-              const uidSnapshot = await getDocs(uidQuery);
-              uidSnapshot.forEach((doc) => {
-                list.push({ id: doc.id, ...(doc.data() as any) });
-              });
-            } catch (error) {
-              console.error(`Error during fallback business query for UID field ${field}:`, error);
-            }
-          }
-        }
-
-        if (list.length === 0 && rawEmail) {
-          // Fallback: try exact match by businessEmail, email, or ownerEmail
-          const emailFields = ['businessEmail', 'email', 'ownerEmail'];
-          for (const field of emailFields) {
-            if (list.length > 0) break;
-            try {
-              const fallbackQuery = query(collection(db, 'businesses'), where(field, '==', rawEmail));
-              const fallbackSnapshot = await getDocs(fallbackQuery);
-              fallbackSnapshot.forEach((doc) => {
-                list.push({ id: doc.id, ...(doc.data() as any) });
-              });
-            } catch (error) {
-              console.error(`Error during fallback business query for field ${field}:`, error);
-            }
-          }
-
-          // If still empty, attempt a broad scan for user email or UID in any string field
-          if (list.length === 0) {
-            try {
-              console.warn('BusinessContext: exact email fallback returned no results, scanning businesses for email or UID in any string field');
-              const allSnap = await getDocs(collection(db, 'businesses'));
-              allSnap.forEach((doc) => {
-                const data = doc.data() as any;
-                const allValues = Object.values(data);
-                const matches = allValues.some((value) => {
-                  if (typeof value !== 'string') return false;
-                  const normalizedValue = value.trim().toLowerCase();
-                  return (
-                    normalizedEmail && normalizedValue === normalizedEmail
-                  ) || (
-                    normalizedEmail && normalizedValue.includes(normalizedEmail)
-                  ) || normalizedValue === user.uid || normalizedValue.includes(user.uid);
-                });
-                if (matches) {
-                  list.push({ id: doc.id, ...(data) });
-                }
-              });
-            } catch (err) {
-              console.error('Error scanning businesses for email/UID match:', err);
-            }
-          }
-        }
-
-        // If we recovered businesses but they don't have the correct userId, try to associate them automatically
-        if (list.length > 0) {
-          list.forEach(async (b) => {
-            try {
-              const existingUserId = (b.userId || b.userUID || b.ownerId) as string | undefined;
-              if (!existingUserId || existingUserId !== user.uid) {
-                await updateDoc(doc(db, 'businesses', b.id), { userId: user.uid });
-                console.info('BusinessContext: associated business', b.id, 'to user', user.uid);
-              }
-            } catch (e) {
-              console.error('Failed to associate business', b.id, e);
-            }
+          setBusinesses(compiledList);
+          setActiveBusiness((prevActive) => {
+            if (compiledList.length === 0) return null;
+            if (!prevActive) return compiledList[0];
+            return compiledList.find((b) => b.id === prevActive.id) || compiledList[0];
           });
+          setLoading(false);
+        } catch (callbackError) {
+          console.error('BusinessContext: Error processing stream update snapshots:', callbackError);
+          setLoading(false);
         }
-
-        setBusinesses(list);
-        setActiveBusiness((prevActiveBusiness) => {
-          if (list.length === 0) {
-            return null;
-          }
-
-          if (!prevActiveBusiness) {
-            return list[0];
-          }
-
-          const matching = list.find((b) => b.id === prevActiveBusiness.id);
-          return matching || list[0];
-        });
-        setLoading(false);
       },
-      (error) => {
-        console.error('Error in businesses snapshot:', error);
+      async (snapshotError) => {
+        console.warn('BusinessContext: Falling back to secure token checks:', snapshotError);
+        const backupList = await loadSharedEmailRecords([]);
+        setBusinesses(backupList);
+        setActiveBusiness(backupList.length > 0 ? backupList[0] : null);
         setLoading(false);
       }
     );
 
     return unsubscribe;
-  }, [user]);
+  }, [user, userRole]);
 
   return (
-    <BusinessContext.Provider value={{ businesses, activeBusiness, setActiveBusiness, loading }}>
+    <BusinessContext.Provider value={{ businesses, activeBusiness, setActiveBusiness, loading, error }}>
       {children}
     </BusinessContext.Provider>
   );

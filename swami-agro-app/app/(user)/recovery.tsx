@@ -26,23 +26,31 @@ export default function RecoveryScreen() {
 
       const map = new Map<string, any>();
 
-      // Primary: businesses linked by userId
-      try {
-        const q = query(collection(db, 'businesses'), where('userId', '==', user.uid));
-        const snap = await getDocs(q);
-        snap.forEach(d => map.set(d.id, { id: d.id, ...(d.data() as any) }));
-      } catch (e) {
-        console.error('primary business query failed', e);
+      // Primary: businesses linked by userId / userUID / ownerId / createdBy
+      const uidFields = ['userId', 'userUID', 'ownerId', 'createdBy', 'ownerUID'];
+      for (const field of uidFields) {
+        try {
+          const q = query(collection(db, 'businesses'), where(field, '==', user.uid));
+          const snap = await getDocs(q);
+          snap.forEach(d => map.set(d.id, { id: d.id, ...(d.data() as any) }));
+        } catch (e) {
+          console.error(`Business recovery query failed for ${field}`, e);
+        }
       }
 
-      // Fallback: businesses linked by businessEmail == user.email
+      // Fallback: businesses linked by businessEmail / email / ownerEmail / userEmail
       if (user.email) {
-        try {
-          const q2 = query(collection(db, 'businesses'), where('businessEmail', '==', user.email));
-          const snap2 = await getDocs(q2);
-          snap2.forEach(d => map.set(d.id, { id: d.id, ...(d.data() as any) }));
-        } catch (e) {
-          console.error('fallback business query failed', e);
+        const normalizedEmail = user.email.trim().toLowerCase();
+        const emailFields = ['businessEmail', 'email', 'ownerEmail', 'userEmail', 'ownerEmailAddress'];
+
+        for (const field of emailFields) {
+          try {
+            const q2 = query(collection(db, 'businesses'), where(field, '==', normalizedEmail));
+            const snap2 = await getDocs(q2);
+            snap2.forEach(d => map.set(d.id, { id: d.id, ...(d.data() as any) }));
+          } catch (e) {
+            console.error(`Business recovery email query failed for ${field}`, e);
+          }
         }
       }
 

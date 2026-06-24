@@ -2,9 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, View, ScrollView, Image, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import { TextInput, Button, Title, Text, Surface, Divider, IconButton, Card } from 'react-native-paper';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { collection, addDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { db, auth, storage } from '../../src/config/firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, auth } from '../../src/config/firebase';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAppTheme } from '../../src/context/ThemeContext';
 import { useLanguage } from '../../src/context/LanguageContext';
@@ -26,7 +26,7 @@ export default function BusinessSetup() {
     gstId: '',
     panNumber: '',
   });
-  
+
   const [logo, setLogo] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
   const [logoChanged, setLogoChanged] = useState(false);
@@ -65,12 +65,25 @@ export default function BusinessSetup() {
     }
   };
 
+  // Convert image file to Base64 string
+  const convertToBase64 = async (uri: string) => {
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: 'base64',
+      });
+      return `data:image/jpeg;base64,${base64}`;
+    } catch (error) {
+      console.error("Base64 Conversion Error:", error);
+      return null;
+    }
+  };
+
   const pickImage = async (type: 'logo' | 'signature') => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: type === 'logo' ? [4, 3] : [3, 1],
-      quality: 0.7,
+      quality: 0.5, // String ची साईझ नियंत्रणात ठेवण्यासाठी गुणवत्ता थोडी कमी केली आहे
     });
 
     if (!result.canceled) {
@@ -83,14 +96,6 @@ export default function BusinessSetup() {
         setSignatureChanged(true);
       }
     }
-  };
-
-  const uploadImage = async (uri: string, path: string) => {
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    const storageRef = ref(storage, path);
-    await uploadBytes(storageRef, blob);
-    return await getDownloadURL(storageRef);
   };
 
   const handleSave = async () => {
@@ -106,12 +111,35 @@ export default function BusinessSetup() {
 
       let photoUrl = logo;
       let signatureUrl = signature;
+      let imageErrors = [];
 
-      if (logoChanged && logo && !logo.startsWith('http')) {
-        photoUrl = await uploadImage(logo, `businesses/${user.uid}/${Date.now()}_logo`);
+      // Firebase Storage ऐवजी थेट Base64 स्ट्रिंगमध्ये रूपांतर करून व्हेरिएबलमध्ये सेव्ह केले
+      if (logoChanged && logo && !logo.startsWith('data:')) {
+        try {
+          const convertedLogo = await convertToBase64(logo);
+          if (convertedLogo) {
+            photoUrl = convertedLogo;
+          } else {
+            imageErrors.push('Logo');
+          }
+        } catch (error) {
+          console.error('Logo conversion failed:', error);
+          imageErrors.push('Logo');
+        }
       }
-      if (signatureChanged && signature && !signature.startsWith('http')) {
-        signatureUrl = await uploadImage(signature, `businesses/${user.uid}/${Date.now()}_sig`);
+      
+      if (signatureChanged && signature && !signature.startsWith('data:')) {
+        try {
+          const convertedSig = await convertToBase64(signature);
+          if (convertedSig) {
+            signatureUrl = convertedSig;
+          } else {
+            imageErrors.push('Signature');
+          }
+        } catch (error) {
+          console.error('Signature conversion failed:', error);
+          imageErrors.push('Signature');
+        }
       }
 
       const businessData = {
@@ -133,10 +161,15 @@ export default function BusinessSetup() {
         });
         Alert.alert(t('success'), 'Business profile created successfully!');
       }
+
+      if (imageErrors.length > 0) {
+        Alert.alert('Warning', `Profile saved successfully. Note: ${imageErrors.join(', ')} image(s) could not be processed. You can try uploading again.`);
+      }
+
       router.replace('/(user)');
     } catch (error) {
-      console.error(error);
-      Alert.alert(t('error'), 'Failed to save business profile');
+      console.error('Save error:', error);
+      Alert.alert(t('error'), 'Failed to save business profile. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -271,10 +304,10 @@ export default function BusinessSetup() {
               />
             </View>
 
-            <Button 
-              mode="contained" 
-              onPress={handleSave} 
-              loading={loading} 
+            <Button
+              mode="contained"
+              onPress={handleSave}
+              loading={loading}
               disabled={loading}
               style={styles.saveBtn}
               contentStyle={styles.saveBtnContent}

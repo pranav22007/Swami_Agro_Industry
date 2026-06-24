@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, View, FlatList, ActivityIndicator, TouchableOpacity, Alert, ScrollView, Linking } from 'react-native';
 import { Title, Text, Surface, IconButton, Searchbar, Divider, Card, Button, Modal, Portal, TextInput, Avatar, Badge } from 'react-native-paper';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, getDocs, doc, runTransaction, increment } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, getDocs, doc, runTransaction, increment, deleteDoc } from 'firebase/firestore';
 import { db } from '../../../src/config/firebase';
 import { useBusiness } from '../../../src/context/BusinessContext';
 import { useAppTheme } from '../../../src/context/ThemeContext';
@@ -87,8 +87,41 @@ export default function CustomersScreen() {
     if (cust.phone) fetchCustomerHistory(cust.phone);
   };
 
+  const handleDeleteCustomer = async () => {
+    if (!selectedCustomer?.id) return;
+
+    Alert.alert(
+      t('deleteCustomerTitle') || 'Delete Customer',
+      'Are you sure you want to permanently delete this customer profile?',
+      [
+        { text: t('cancel'), style: 'cancel' },
+        {
+          text: t('delete'),
+          style: 'destructive',
+          onPress: async () => {
+            setUpdating(true);
+            try {
+              await deleteDoc(doc(db, 'customers', selectedCustomer.id));
+              setDetailsVisible(false);
+              setSelectedCustomer(null);
+              Alert.alert(t('success'), 'Customer file deleted successfully.');
+            } catch (error) {
+              console.error("Error deleting customer: ", error);
+              Alert.alert(t('error'), 'Failed to complete delete sequence.');
+            } finally {
+              setUpdating(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleDeleteTransaction = async (sale: any) => {
-    if (userRole !== 'admin') return;
+    if (userRole !== 'admin') {
+      Alert.alert('Access Denied', 'Only administrators have permission to delete transactions.');
+      return;
+    }
 
     Alert.alert(
       t('deleteConfirmTitle') || 'Delete Transaction',
@@ -107,7 +140,6 @@ export default function CustomersScreen() {
               const transactionRef = doc(db, 'transactions', sale.id);
 
               await runTransaction(db, async (transaction) => {
-                // Restore stock for each item in the sale
                 if (sale.items && Array.isArray(sale.items)) {
                   for (const item of sale.items) {
                     const itemRef = doc(db, `businesses/${activeBusiness.id}/items`, item.id);
@@ -117,16 +149,13 @@ export default function CustomersScreen() {
                   }
                 }
 
-                // Decrement total sales in business doc
                 transaction.update(businessRef, {
                   totalSales: increment(-sale.total)
                 });
                 
-                // Delete the transaction doc
                 transaction.delete(transactionRef);
               });
 
-              // Refresh history
               if (selectedCustomer?.phone) fetchCustomerHistory(selectedCustomer.phone);
               Alert.alert(t('success'), t('saleDeleted') || "Transaction deleted.");
             } catch (error) {
@@ -176,8 +205,8 @@ export default function CustomersScreen() {
     c.address?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  if (loading) {
-    return <AppLoader message={t('loading') || 'Loading...'} />;
+  if (loading || updating) {
+    return <AppLoader message={updating ? 'Processing...' : (t('loading') || 'Loading...')} />;
   }
 
   return (
@@ -206,10 +235,11 @@ export default function CustomersScreen() {
           <TouchableOpacity onPress={() => openDetails(item)} activeOpacity={0.7}>
             <Card style={[styles.card, { backgroundColor: theme.colors.surface }]} elevation={1}>
               <Card.Content style={styles.cardContent}>
+                
                 <View style={styles.cardLeft}>
-                  <View>
+                  <View style={styles.avatarWrapper}>
                     <Avatar.Text 
-                      size={48} 
+                      size={46} 
                       label={item.name?.substring(0, 1).toUpperCase() || 'C'} 
                       style={{ backgroundColor: theme.colors.primaryContainer }} 
                       color={theme.colors.primary} 
@@ -221,29 +251,31 @@ export default function CustomersScreen() {
                   <View style={styles.infoContainer}>
                     <Text style={[styles.name, { color: theme.colors.onSurface }]} numberOfLines={1}>{item.name}</Text>
                     <Text style={[styles.phone, { color: theme.colors.onSurfaceVariant }]}>{item.phone}</Text>
-                    {item.address && (
+                    {item.address ? (
                       <Text style={[styles.address, { color: theme.colors.onSurfaceVariant }]} numberOfLines={1}>
                         {item.address}
                       </Text>
-                    )}
+                    ) : null}
                   </View>
                 </View>
+
                 <View style={styles.cardRight}>
                   <View style={styles.actionRow}>
                     <Surface style={[styles.miniAction, { backgroundColor: theme.colors.primaryContainer }]} elevation={0}>
-                      <IconButton icon="phone" size={18} iconColor={theme.colors.primary} onPress={() => handleCall(item.phone)} style={{ margin: 0 }} />
+                      <IconButton icon="phone" size={16} iconColor={theme.colors.primary} onPress={() => handleCall(item.phone)} style={{ margin: 0 }} />
                     </Surface>
                     <Surface style={[styles.miniAction, { backgroundColor: '#e8f5e9' }]} elevation={0}>
-                      <IconButton icon="whatsapp" size={18} iconColor="#2E7D32" onPress={() => handleWhatsApp(item.phone)} style={{ margin: 0 }} />
+                      <IconButton icon="whatsapp" size={16} iconColor="#2E7D32" onPress={() => handleWhatsApp(item.phone)} style={{ margin: 0 }} />
                     </Surface>
                   </View>
                   <View style={styles.mostOrderedBox}>
-                    <Text style={styles.orderLabel}>Top Items</Text>
+                    <Text style={styles.orderLabel}>Top Item</Text>
                     <Text style={[styles.mostOrdered, { color: theme.colors.primary }]} numberOfLines={1}>
                       {item.mostOrdered?.length > 0 ? item.mostOrdered[0] : 'None'}
                     </Text>
                   </View>
                 </View>
+
               </Card.Content>
             </Card>
           </TouchableOpacity>
@@ -295,10 +327,19 @@ export default function CustomersScreen() {
             <ScrollView showsVerticalScrollIndicator={false}>
               <View style={styles.detailsHeader}>
                 <Avatar.Text size={60} label={selectedCustomer.name[0].toUpperCase()} style={{ backgroundColor: theme.colors.primaryContainer }} color={theme.colors.primary} />
-                <View style={{ marginLeft: 20 }}>
-                  <Title style={{ color: theme.colors.primary, fontWeight: 'bold' }}>{selectedCustomer.name}</Title>
+                <View style={{ marginLeft: 15, flex: 1 }}>
+                  <Title style={{ color: theme.colors.primary, fontWeight: 'bold' }} numberOfLines={1}>
+                    {selectedCustomer.name}
+                  </Title>
                   <Text style={{ color: theme.colors.onSurfaceVariant }}>{selectedCustomer.phone}</Text>
                 </View>
+                <IconButton 
+                  icon="delete-outline" 
+                  iconColor={theme.colors.error} 
+                  size={24} 
+                  onPress={handleDeleteCustomer}
+                  style={{ margin: 0 }}
+                />
               </View>
               
               <Divider style={{ marginVertical: 15 }} />
@@ -321,25 +362,33 @@ export default function CustomersScreen() {
                 <ActivityIndicator style={{ margin: 20 }} color={theme.colors.primary} />
               ) : (
                 customerHistory.length > 0 ? customerHistory.map((order, idx) => (
-                  <TouchableOpacity 
-                    key={idx} 
-                    onLongPress={() => handleDeleteTransaction(order)}
-                    activeOpacity={0.6}
-                  >
-                    <Surface style={[styles.historyRow, { borderBottomColor: theme.colors.surfaceVariant }]} elevation={0}>
-                      <View>
-                        <Text style={{ fontWeight: 'bold' }}>#{order.invoiceNumber || 'INV'}</Text>
-                        <Text style={{ fontSize: 12, color: '#888' }}>{order.timestamp?.toDate().toLocaleDateString()}</Text>
-                      </View>
-                      <Text style={{ fontWeight: 'bold', color: theme.colors.primary }}>₹{order.total.toLocaleString()}</Text>
-                    </Surface>
-                  </TouchableOpacity>
+                  <Surface key={idx} style={[styles.historyRow, { borderBottomColor: theme.colors.surfaceVariant }]} elevation={0}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontWeight: 'bold' }}>#{order.invoiceNumber || 'INV'}</Text>
+                      <Text style={{ fontSize: 12, color: '#888' }}>{order.timestamp?.toDate().toLocaleDateString()}</Text>
+                    </View>
+                    
+                    <View style={styles.historyRowRight}>
+                      <Text style={[styles.historyAmount, { color: theme.colors.primary }]}>₹{order.total.toLocaleString()}</Text>
+                      
+                      {/* Added Delete Button for specific transactions inline */}
+                      {userRole === 'admin' && (
+                        <IconButton 
+                          icon="delete-outline" 
+                          iconColor={theme.colors.error} 
+                          size={18} 
+                          onPress={() => handleDeleteTransaction(order)}
+                          style={styles.inlineDeleteBtn}
+                        />
+                      )}
+                    </View>
+                  </Surface>
                 )) : (
                   <Text style={{ textAlign: 'center', margin: 20, color: '#888' }}>No orders found</Text>
                 )
               )}
               
-              <Button mode="outlined" onPress={() => setDetailsVisible(false)} style={{ marginTop: 20 }} textColor={theme.colors.primary}>
+              <Button mode="outlined" onPress={() => setDetailsVisible(false)} style={{ marginTop: 25 }} textColor={theme.colors.primary}>
                 Close
               </Button>
             </ScrollView>
@@ -359,27 +408,31 @@ const styles = StyleSheet.create({
   searchBar: { elevation: 0, borderRadius: 15, height: 45 },
   listContent: { padding: 15, paddingBottom: 40 },
   card: { marginBottom: 12, borderRadius: 20, overflow: 'hidden' },
-  cardContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
-  cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1.4 },
-  infoContainer: { marginLeft: 15, flex: 1 },
-  name: { fontSize: 17, fontWeight: 'bold', marginBottom: 2 },
-  phone: { fontSize: 13, fontWeight: '500', marginBottom: 2 },
-  address: { fontSize: 12, fontWeight: '400' },
-  orderBadge: { position: 'absolute', top: -5, right: -5, borderWidth: 2, borderColor: 'white' },
-  cardRight: { flex: 1, alignItems: 'flex-end' },
-  actionRow: { flexDirection: 'row', marginBottom: 8 },
-  miniAction: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
-  mostOrderedBox: { alignItems: 'flex-end' },
+  cardContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 4 },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 8 },
+  avatarWrapper: { position: 'relative' },
+  infoContainer: { marginLeft: 12, flex: 1, justifyContent: 'center' },
+  name: { fontSize: 16, fontWeight: 'bold', marginBottom: 2, lineHeight: 20 },
+  phone: { fontSize: 13, fontWeight: '500', marginBottom: 1, lineHeight: 16 },
+  address: { fontSize: 12, fontWeight: '400', lineHeight: 15 },
+  orderBadge: { position: 'absolute', top: -4, right: -4, borderWidth: 1.5, borderColor: 'white' },
+  cardRight: { flex: 0.8, alignItems: 'flex-end', justifyContent: 'center' },
+  actionRow: { flexDirection: 'row', marginBottom: 6 },
+  miniAction: { width: 34, height: 34, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginLeft: 8 },
+  mostOrderedBox: { alignItems: 'flex-end', paddingRight: 2 },
   orderLabel: { fontSize: 9, color: '#aaa', textTransform: 'uppercase', fontWeight: 'bold', letterSpacing: 0.5 },
-  mostOrdered: { fontSize: 13, fontWeight: 'bold' },
+  mostOrdered: { fontSize: 12, fontWeight: 'bold', marginTop: 1 },
   emptyContainer: { alignItems: 'center', marginTop: 100 },
   modal: { padding: 25, margin: 20, borderRadius: 28 },
   detailsModal: { padding: 25, margin: 15, borderRadius: 30, maxHeight: '85%' },
-  detailsHeader: { flexDirection: 'row', alignItems: 'center' },
+  detailsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   ltvContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
   ltvBox: { flex: 0.48, padding: 15, borderRadius: 20, alignItems: 'center' },
   ltvLabel: { fontSize: 10, fontWeight: 'bold', textTransform: 'uppercase', marginBottom: 4 },
   ltvValue: { fontSize: 18, fontWeight: 'bold' },
-  historyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1 },
+  historyRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1 },
+  historyRowRight: { flexDirection: 'row', alignItems: 'center' },
+  historyAmount: { fontWeight: 'bold', fontSize: 15, marginRight: 4 },
+  inlineDeleteBtn: { margin: 0, padding: 0 },
   input: { marginBottom: 15, backgroundColor: 'transparent' }
 });

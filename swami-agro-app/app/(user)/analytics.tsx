@@ -13,12 +13,12 @@ import AppLoader from '../../src/components/AppLoader';
 const { width } = Dimensions.get('window');
 
 export default function AnalyticsScreen() {
-  const { activeBusiness } = useBusiness();
+  const { activeBusiness, loading: businessLoading } = useBusiness();
   const { theme } = useAppTheme();
   const { t } = useLanguage();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
-  const [chartData, setChartData] = useState<{labels: string[], datasets: {data: number[]}[]}>({
+  const [chartData, setChartData] = useState<{ labels: string[], datasets: { data: number[] }[] }>({
     labels: [],
     datasets: [{ data: [] }]
   });
@@ -32,7 +32,16 @@ export default function AnalyticsScreen() {
   });
 
   useEffect(() => {
-    if (!activeBusiness?.id) return;
+    // If the core business context is still fetching profiles, wait for it
+    if (businessLoading) return;
+
+    // If business profiles loaded but none are assigned active, stop the loader safely
+    if (!activeBusiness?.id) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
 
     const qTransactions = query(collection(db, 'transactions'), where('businessId', '==', activeBusiness.id));
     const qExpenses = query(collection(db, 'expenses'), where('businessId', '==', activeBusiness.id));
@@ -46,28 +55,26 @@ export default function AnalyticsScreen() {
         const data = doc.data();
         const date = data.timestamp?.toDate() || new Date();
         const dateKey = date.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
-        
+
         dailyData[dateKey] = (dailyData[dateKey] || 0) + (data.total || 0);
         total += (data.total || 0);
 
-        // Count products
         if (data.items && Array.isArray(data.items)) {
           data.items.forEach((item: any) => {
             if (productMap[item.name]) {
               productMap[item.name].qty += item.qty;
-              productMap[item.name].revenue += (item.price * item.qty * (1 + (item.gst || 0)/100));
+              productMap[item.name].revenue += (item.price * item.qty * (1 + (item.gst || 0) / 100));
             } else {
               productMap[item.name] = {
                 name: item.name,
                 qty: item.qty,
-                revenue: (item.price * item.qty * (1 + (item.gst || 0)/100))
+                revenue: (item.price * item.qty * (1 + (item.gst || 0) / 100))
               };
             }
           });
         }
       });
 
-      // Get last 7 days for chart
       const sortedKeys = Object.keys(dailyData).sort((a, b) => {
         return new Date(a).getTime() - new Date(b).getTime();
       }).slice(-7);
@@ -92,6 +99,12 @@ export default function AnalyticsScreen() {
         topProducts: topProds,
         netProfit: total - prev.totalExpenses
       }));
+
+      // Stop the loader once transactions match
+      setLoading(false);
+    }, (error) => {
+      console.error("Analytics transactions pipeline error:", error);
+      setLoading(false);
     });
 
     const unsubscribeExpenses = onSnapshot(qExpenses, (snapshot) => {
@@ -99,11 +112,16 @@ export default function AnalyticsScreen() {
       snapshot.forEach(doc => {
         totalExp += doc.data().amount || 0;
       });
-      setStats(prev => ({ 
-        ...prev, 
+      setStats(prev => ({
+        ...prev,
         totalExpenses: totalExp,
         netProfit: prev.totalIncome - totalExp
       }));
+
+      // Stop the loader once expenses update
+      setLoading(false);
+    }, (error) => {
+      console.error("Analytics expenses pipeline error:", error);
       setLoading(false);
     });
 
@@ -111,10 +129,28 @@ export default function AnalyticsScreen() {
       unsubscribeTransactions();
       unsubscribeExpenses();
     };
-  }, [activeBusiness?.id]);
+  }, [activeBusiness?.id, businessLoading]);
 
-  if (loading) {
+  // Handle various component shell loading blocks cleanly
+  if (businessLoading || loading) {
     return <AppLoader message={t('loading') || 'Loading...'} />;
+  }
+
+  // Handle case where no business setup is loaded
+  if (!activeBusiness) {
+    return (
+      <View style={[styles.container, { backgroundColor: theme.colors.background, justifyContent: 'center', alignItems: 'center', padding: 20 }]}>
+        <Title style={{ color: theme.colors.primary, marginBottom: 10 }}>No Business Selected</Title>
+        <Text style={{ color: theme.colors.onSurfaceVariant, textAlign: 'center', marginBottom: 20 }}>
+          Please complete your business setup parameters to view analytics reporting tools.
+        </Text>
+        <TouchableOpacity onPress={() => router.push('/(user)/business-setup')}>
+          <Surface style={{ paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, backgroundColor: theme.colors.primary }}>
+            <Text style={{ color: 'white', fontWeight: 'bold' }}>Go to Setup</Text>
+          </Surface>
+        </TouchableOpacity>
+      </View>
+    );
   }
 
   return (
@@ -130,46 +166,55 @@ export default function AnalyticsScreen() {
         <Card style={[styles.chartCard, { backgroundColor: theme.colors.surface }]} elevation={2}>
           <Card.Content>
             <Title style={{ color: theme.colors.primary, marginBottom: 20 }}>{t('incomeTrend') || 'Income Trend'}</Title>
-            <LineChart
-              data={chartData}
-              width={width - 60}
-              height={220}
-              chartConfig={{
-                backgroundColor: theme.colors.surface,
-                backgroundGradientFrom: theme.colors.surface,
-                backgroundGradientTo: theme.colors.surface,
-                decimalPlaces: 0,
-                color: (opacity = 1) => theme.colors.primary,
-                labelColor: (opacity = 1) => theme.colors.onSurfaceVariant,
-                style: { borderRadius: 16 },
-                propsForDots: {
-                  r: "6",
-                  strokeWidth: "2",
-                  stroke: theme.colors.primary
-                }
-              }}
-              bezier
-              style={{ marginVertical: 8, borderRadius: 16 }}
-            />
+
+            {/* Added defensive handling for Chart component to completely prevent calculation crashes */}
+            {chartData && chartData.datasets[0]?.data?.length > 0 && chartData.datasets[0].data[0] !== 0 ? (
+              <LineChart
+                data={chartData}
+                width={width - 60}
+                height={220}
+                chartConfig={{
+                  backgroundColor: theme.colors.surface,
+                  backgroundGradientFrom: theme.colors.surface,
+                  backgroundGradientTo: theme.colors.surface,
+                  decimalPlaces: 0,
+                  color: (opacity = 1) => theme.colors.primary,
+                  labelColor: (opacity = 1) => theme.colors.onSurfaceVariant,
+                  style: { borderRadius: 16 },
+                  propsForDots: {
+                    r: "6",
+                    strokeWidth: "2",
+                    stroke: theme.colors.primary
+                  }
+                }}
+                bezier
+                style={{ marginVertical: 8, borderRadius: 16 }}
+              />
+            ) : (
+              <View style={{ height: 220, justifyContent: 'center', alignItems: 'center' }}>
+                <IconButton icon="chart-line-variant" size={48} iconColor={theme.colors.onSurfaceVariant} />
+                <Text style={{ color: theme.colors.onSurfaceVariant }}>{t('noDataAvailable') || 'No transaction data available yet'}</Text>
+              </View>
+            )}
           </Card.Content>
         </Card>
 
         <View style={styles.statsGrid}>
-          <StatBox 
-            label={t('totalIncome') || 'Total Income'} 
-            value={`₹${stats.totalIncome.toLocaleString('en-IN')}`} 
+          <StatBox
+            label={t('totalIncome') || 'Total Income'}
+            value={`₹${stats.totalIncome.toLocaleString('en-IN')}`}
             icon="cash-multiple"
             theme={theme}
           />
-          <StatBox 
-            label={t('totalOrders') || 'Total Orders'} 
-            value={stats.totalOrders.toString()} 
+          <StatBox
+            label={t('totalOrders') || 'Total Orders'}
+            value={stats.totalOrders.toString()}
             icon="cart-outline"
             theme={theme}
           />
-          <StatBox 
-            label={t('avgOrder') || 'Avg. Order'} 
-            value={`₹${Math.round(stats.avgOrderValue).toLocaleString('en-IN')}`} 
+          <StatBox
+            label={t('avgOrder') || 'Avg. Order'}
+            value={`₹${Math.round(stats.avgOrderValue).toLocaleString('en-IN')}`}
             icon="calculator-variant"
             theme={theme}
           />

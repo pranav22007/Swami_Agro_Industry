@@ -120,10 +120,23 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     Alert.alert(t('logout'), 'Are you sure you want to log out?', [
       { text: t('cancel'), style: 'cancel' },
-      { text: t('logout'), onPress: () => auth.signOut(), style: 'destructive' }
+      {
+        text: t('logout'),
+        onPress: async () => {
+          try {
+            await auth.signOut();
+            setActiveBusiness(null);
+            router.replace({ pathname: '/' });
+          } catch (err) {
+            console.error('Logout failed', err);
+            Alert.alert(t('error'), 'Unable to log out. Please try again.');
+          }
+        },
+        style: 'destructive',
+      },
     ]);
   };
 
