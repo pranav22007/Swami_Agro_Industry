@@ -219,6 +219,7 @@ export default function PreviousSellScreen() {
     const cdPercentage = sale.cdPercentage ?? 2;
     const cdAmount = sale.cdAmount ?? 0;
     const bank = sale.bankDetails;
+    const invNo = sale.invoiceNumber || sale.id.slice(-6).toUpperCase();
 
     // Use absolute URLs and ensure images are loaded
     const logoUrl = await getBase64Image(businessInfo?.photoUrl || '');
@@ -229,7 +230,7 @@ export default function PreviousSellScreen() {
         <head>
           <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no" />
           <style>
-            @page { margin: 0; }
+            @page { margin: 20px; }
             body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #333; background-color: #fff; }
             .container { padding: 40px; }
             .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 4px solid #1b5e20; padding-bottom: 20px; }
@@ -237,9 +238,7 @@ export default function PreviousSellScreen() {
             .logo { width: 80px; height: 80px; object-fit: contain; margin-bottom: 15px; border-radius: 12px; background: #f9f9f9; padding: 5px; display: ${logoUrl ? 'block' : 'none'}; }
             .business-name { font-size: 28px; font-weight: 800; color: #1b5e20; margin: 0; text-transform: uppercase; letter-spacing: 1px; }
             .business-detail { font-size: 12px; color: #666; margin: 3px 0; line-height: 1.4; }
-            .invoice-label { flex: 1; text-align: right; }
-            .invoice-title { font-size: 42px; font-weight: 900; color: #e8f5e9; margin: 0; position: absolute; right: 40px; top: 30px; z-index: -1; }
-            .invoice-meta { margin-top: 50px; }
+            .invoice-meta { margin-top: 10px; text-align: right; }
             .meta-item { font-size: 14px; margin-bottom: 5px; }
             .meta-label { font-weight: bold; color: #1b5e20; }
 
@@ -248,6 +247,55 @@ export default function PreviousSellScreen() {
             .box-title { font-size: 11px; font-weight: bold; color: #1b5e20; text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid #e8f5e9; padding-bottom: 8px; margin-bottom: 12px; }
             .customer-name { font-size: 18px; font-weight: 700; margin-bottom: 5px; color: #222; }
             .transport-detail { font-size: 12px; color: #555; margin: 4px 0; display: flex; justify-content: space-between; }
+
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+            th { background: #1b5e20; color: white; padding: 12px 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; font-weight: 600; text-align: center; }
+            th:first-child { border-radius: 8px 0 0 0; text-align: left; }
+            th:last-child { border-radius: 0 8px 0 0; text-align: right; }
+
+            .footer { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 20px; }
+            .bank-info { font-size: 12px; color: #555; background: #f9f9f9; padding: 15px; border-radius: 10px; width: 45%; }
+            .totals-table { width: 45%; }
+            .total-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f0f0; }
+            .total-row.grand-total { border-top: 2px solid #1b5e20; border-bottom: none; margin-top: 10px; padding-top: 15px; }
+            .grand-total-label { font-size: 18px; font-weight: 800; color: #1b5e20; }
+            .grand-total-value { font-size: 20px; font-weight: 800; color: #1b5e20; }
+
+            .signature-box { text-align: center; }
+            .signature-img { width: 120px; height: 50px; object-fit: contain; margin-bottom: 4px; }
+            .signature-line { border-top: 1px dashed #ccc; padding-top: 5px; font-weight: bold; font-size: 12px; color: #1b5e20; }
+            .thanks { text-align: center; color: #aaa; font-size: 11px; margin-top: 40px; font-style: italic; }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <div class="header">
+              <div class="business-info">
+                <img src="${logoUrl}" class="logo" />
+                <h2 class="business-name">${businessInfo?.businessName || 'Swami Agro'}</h2>
+                <p class="business-detail"><b>GSTIN:</b> ${businessInfo?.gstId || 'N/A'}</p>
+                <p class="business-detail"><b>Contact:</b> ${businessInfo?.phoneNumber || businessInfo?.phone || ''}</p>
+                <p class="business-detail" style="margin-top: 6px; color: #444; font-weight: 500;">${businessInfo?.address || ''}</p>
+              </div>
+              <div class="invoice-meta">
+                <div class="meta-item"><span class="meta-label">Invoice No:</span> ${invNo}</div>
+                <div class="meta-item"><span class="meta-label">Date:</span> ${date}</div>
+              </div>
+            </div>
+
+            <div class="bill-grid">
+              <div class="bill-box">
+                <div class="box-title">Bill To</div>
+                <div class="customer-name">${sale.customerName || 'Walk-in Customer'}</div>
+                <p class="business-detail"><b>Phone:</b> ${sale.customerPhone || 'N/A'}</p>
+              </div>
+              <div class="bill-box">
+                <div class="box-title">Transport Details</div>
+                <div class="transport-detail"><span>Destination:</span> <b>${sale.destination || 'N/A'}</b></div>
+                <div class="transport-detail"><span>Vehicle No:</span> <b>${sale.vehicleNumber || 'N/A'}</b></div>
+                <div class="transport-detail"><span>Dispatch:</span> <b>${sale.dispatchLocation || 'N/A'}</b></div>
+              </div>
+            </div>
 
             <table>
               <thead>
